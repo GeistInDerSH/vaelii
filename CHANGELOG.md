@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Starter loading preserves non-unary predicate specialization.** The starter
+  assigns `unary_predicate` only to the `thing` subtype hierarchy, not every `genl`
+  node. Binary mapping predicates retain their declared arity. Exact `arity` derives
+  `fixed_arity` even when argument-type entailment is disabled. Taxonomy coverage
+  excludes declared non-unary predicates without hiding unknown type islands.
+  Argument metadata (`arg` and its projections, `genlArg`, `quotedArg`, `interArg`)
+  accepts relations, including functions; `InstantFn` declares its six existing
+  integer-field contracts. Recursive function-input enforcement remains follow-up
+  work, documented in [docs/argtypes.md](docs/argtypes.md#relation-wide-declarations-and-the-runtime-boundary).
+  *Class:* **Fix**.
+  [docs/taxonomy.md](docs/taxonomy.md#relations-and-arity-policy)
+
+- **Arity policy is vocabulary over every relation.** `relation` is now the common
+  parent of `predicate` and `function`. Unsuffixed `unary` / `binary` / `ternary` are
+  the relation-wide exact classes, with predicate and function specializations;
+  `relationTypeByArity` owns their shared numeric mapping. Exact `arity` is fixed-only,
+  while `arityMin` states a variable relation's lower bound and derives the generic
+  `at_least_binary_relation` / `at_least_ternary_relation` floors. `fixed_arity` and
+  `variable_arity` are disjoint, and every shipped relation is classified in exactly
+  one. `admitsArgnum` remains documentary. *Class:* **Additive**.
+  *Migration:* none.
+  [docs/taxonomy.md](docs/taxonomy.md#relations-and-arity-policy)
+
 - **`predAllSpecified` and `predSpecifiedAll` go binary: the filler type derives from
   the predicate's own slot contract.** The ternary forms restated in a third argument
   what `(arg P 2 R)` / `(genlArg P 2 R)` already say, and a restated type can disagree
