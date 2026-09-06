@@ -49,9 +49,9 @@
         preds (u/terms "pr" P)
         pcum  (u/zipf-cumulative P 1.2)               ; skewed consequents, like real rules
         hot   (first preds) mid (nth preds (quot P 2)) rare (last preds)]
-    (println (format "vaelii backward-chain :rule-index scaling — up to %,d synthetic rules, %,d predicates (Zipf consequents)" maxn P))
+    (printf  "vaelii backward-chain :rule-index scaling — up to %,d synthetic rules, %,d predicates (Zipf consequents)\n" maxn P)
     (println "candidate-set sizes + posting RAM are TRUSTED (structural); wall-clock would be untrusted.")
-    (println (format "\n  %-10s %14s %14s %14s %12s %12s" "rules(N)" "rules→hot" "rules→mid" "rules→rare" "ridx baseMB" "ridx int[]MB"))
+    (printf  "\n  %-10s %14s %14s %14s %12s %12s\n" "rules(N)" "rules→hot" "rules→mid" "rules→rare" "ridx baseMB" "ridx int[]MB")
     (println (str "  " (apply str (repeat 80 \-))))
     (doseq [n [10000 50000 (min maxn 200000)]]
       (let [kb (kb/open-kb {:backend :memory :space 30 :recover? false}
@@ -66,9 +66,9 @@
               posts  (vec (ridx-postings state))
               base   (postings/retained posts)
               arr    (postings/retained (mapv ->intarr posts))]
-          (println (format "  %-10s %14s %14s %14s %12.1f %12.1f"
-                           (format "%,d" n) (format "%,d" c-hot) (format "%,d" c-mid) (format "%,d" c-rare)
-                           (/ base 1048576.0) (/ arr 1048576.0))))))
+          (printf "  %-10s %14s %14s %14s %12.1f %12.1f\n"
+                  (format "%,d" n) (format "%,d" c-hot) (format "%,d" c-mid) (format "%,d" c-rare)
+                  (/ base 1048576.0) (/ arr 1048576.0)))))
     (println "\n  Reading:")
     (println "  - candidate set for a goal = rules-by-consequent(pred): a hot consequent's set grows")
     (println "    with N (Zipf), a rare one stays ~flat — the lookup is indexed (bounded by the")

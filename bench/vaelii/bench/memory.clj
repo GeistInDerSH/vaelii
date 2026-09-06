@@ -54,8 +54,8 @@
         (kb/create-sentex kb s c)
         (when (zero? (mod i 200)) (.add sample [s c]))
         (when (and (pos? i) (zero? (mod i 50000)))
-          (println (format "  … %,d facts (%.0f/s)" i
-                           (/ i (/ (- (System/nanoTime) t0) 1e9)))))))
+          (printf "  … %,d facts (%.0f/s)\n" i
+                  (/ i (/ (- (System/nanoTime) t0) 1e9))))))
     {:secs (/ (- (System/nanoTime) t0) 1e9) :sample (vec sample)}))
 
 (defn- load-rules! [kb ^java.util.Random rng {:keys [r preds pred-cum]}]
@@ -141,10 +141,10 @@
 
 (defn- print-benches [rows]
   (println)
-  (println (format "%-42s %12s %14s" "shape" "avg µs" "avg result"))
+  (printf  "%-42s %12s %14s\n" "shape" "avg µs" "avg result")
   (println (apply str (repeat 70 \-)))
   (doseq [{:keys [label avg-ms avg-size]} rows]
-    (println (format "%-42s %12.2f %14.0f" label (* 1000.0 avg-ms) avg-size))))
+    (printf "%-42s %12.2f %14.0f\n" label (* 1000.0 avg-ms) avg-size)))
 
 (defn -main [& args]
   (let [[facts rules iters] (map #(when % (Long/parseLong %)) args)
@@ -164,8 +164,8 @@
                 :compound-frac 0.15}
         kb     (kb/open-kb {:backend :memory :space 10 :recover? false}
                            (fn [_] nil) (fn [_] nil))]
-    (println (format "vaelii index benchmark — IN-MEMORY backend — %,d facts, %,d rules, %d preds, %,d individuals"
-                     n r P M))
+    (printf "vaelii index benchmark — IN-MEMORY backend — %,d facts, %,d rules, %d preds, %,d individuals\n"
+            n r P M)
     (p/clear-records! (:records kb)) (p/clear-index! (:index kb))
     (let [rng    (java.util.Random. 42)
           _      (gc!)
@@ -176,8 +176,8 @@
           full   (heap-used)
           total  (- full base)]
       (println)
-      (println (format "loaded %,d facts in %.1fs (%,.0f/s), %,d rules in %.1fs"
-                       n fsecs (/ n fsecs) r rsecs))
+      (printf "loaded %,d facts in %.1fs (%,.0f/s), %,d rules in %.1fs\n"
+              n fsecs (/ n fsecs) r rsecs)
       ;; the latency battery runs while the whole index is live …
       (print-benches (run-benches kb cfg sample))
       ;; … then split the retained heap: clear the index, and what is freed was the
@@ -191,10 +191,10 @@
               bpf    #(double (/ % (max 1 n)))
               gb     #(/ (* (bpf %) 1e8) (* 1024.0 1024 1024))]
           (println)
-          (println (format "retained JVM heap (records + index): %.1f MB   ≈ %.0f bytes/fact"
-                           (/ total 1048576.0) (bpf total)))
-          (println (format "  records: %.1f MB (≈ %.0f bytes/fact)   index: %.1f MB (≈ %.0f bytes/fact)"
-                           (/ recs 1048576.0) (bpf recs) (/ idx 1048576.0) (bpf idx)))
-          (println (format "extrapolated to 100M facts: ≈ %.1f GB total  (records %.1f GB + index %.1f GB), linear"
-                           (gb total) (gb recs) (gb idx)))))
+          (printf "retained JVM heap (records + index): %.1f MB   ≈ %.0f bytes/fact\n"
+                  (/ total 1048576.0) (bpf total))
+          (printf "  records: %.1f MB (≈ %.0f bytes/fact)   index: %.1f MB (≈ %.0f bytes/fact)\n"
+                  (/ recs 1048576.0) (bpf recs) (/ idx 1048576.0) (bpf idx))
+          (printf "extrapolated to 100M facts: ≈ %.1f GB total  (records %.1f GB + index %.1f GB), linear\n"
+                  (gb total) (gb recs) (gb idx))))
       (shutdown-agents))))

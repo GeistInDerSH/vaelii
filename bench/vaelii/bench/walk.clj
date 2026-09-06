@@ -144,38 +144,38 @@
 ;; ---- the rows -----------------------------------------------------------
 
 (defn- print-attribution [mounts walk fetch n]
-  (println (format "\n══ a %,d-node chain: one closure ask, per mount ══" n))
-  (println (format "  %-14s %10s %11s %12s %12s %10s"
-                   "mount" "walk ms" "µs/edge" "fetch µs/ed" "fetch share" "edges"))
+  (printf  "\n══ a %,d-node chain: one closure ask, per mount ══\n" n)
+  (printf  "  %-14s %10s %11s %12s %12s %10s\n"
+           "mount" "walk ms" "µs/edge" "fetch µs/ed" "fetch share" "edges")
   (println (str "  " (apply str (repeat 74 \-))))
   (doseq [m mounts
           :let [e  (:edges m)
                 w  (median (get walk (:backend m)))
                 fs (median (get fetch (:backend m)))]]
-    (println (format "  %-14s %10.1f %11.2f %12.2f %11.0f%% %,10d"
-                     (name (:backend m)) w (/ (* 1000.0 w) e) (/ (* 1000.0 fs) e)
-                     (* 100.0 (/ fs w)) e))))
+    (printf "  %-14s %10.1f %11.2f %12.2f %11.0f%% %,10d\n"
+            (name (:backend m)) w (/ (* 1000.0 w) e) (/ (* 1000.0 fs) e)
+            (* 100.0 (/ fs w)) e)))
 
 (defn- print-repeats [mounts rows n]
-  (println (format "\n══ the same %,d-node ask again, nothing changed between ══" n))
-  (println (format "  %-14s %12s %11s %11s %13s %13s"
-                   "mount" "cleared ms" "repeat ms" "repeat/1st" "1st fetches" "2nd fetches"))
+  (printf  "\n══ the same %,d-node ask again, nothing changed between ══\n" n)
+  (printf  "  %-14s %12s %11s %11s %13s %13s\n"
+           "mount" "cleared ms" "repeat ms" "repeat/1st" "1st fetches" "2nd fetches")
   (println (str "  " (apply str (repeat 80 \-))))
   (doseq [m mounts
           :let [{:keys [cold cold-n warm warm-n]} (get rows (:backend m))]]
-    (println (format "  %-14s %12.1f %11.1f %10.2f× %,13d %,13d"
-                     (name (:backend m)) cold warm (/ warm cold) cold-n warm-n))))
+    (printf "  %-14s %12.1f %11.1f %10.2f× %,13d %,13d\n"
+            (name (:backend m)) cold warm (/ warm cold) cold-n warm-n)))
 
 (defn- print-growth [small big walk-s walk-b]
   (println "\n══ growth: the same walk at two sizes ══")
-  (println (format "  %-14s %11s %11s %10s %12s" "mount" "small ms" "big ms" "×size" "×time"))
+  (printf  "  %-14s %11s %11s %10s %12s\n" "mount" "small ms" "big ms" "×size" "×time")
   (println (str "  " (apply str (repeat 62 \-))))
   (doseq [[s b] (map vector small big)
           :let [ws (median (get walk-s (:backend s)))
                 wb (median (get walk-b (:backend b)))]]
-    (println (format "  %-14s %11.1f %11.1f %9.1f× %11.1f×"
-                     (name (:backend s)) ws wb
-                     (/ (double (:edges b)) (:edges s)) (/ wb ws)))))
+    (printf "  %-14s %11.1f %11.1f %9.1f× %11.1f×\n"
+            (name (:backend s)) ws wb
+            (/ (double (:edges b)) (:edges s)) (/ wb ws))))
 
 (defn- repeat-rows
   "Per mount: the ask on a cleared literal cache, then the same ask again.  The fetch
@@ -208,15 +208,15 @@
         [_ wn]  (counted m)
         bare    (binding [lc/*enabled* false] (median (repeatedly reps one)))
         floor   (median (repeatedly reps near))]
-    (println (format "\n══ a %,d-node closure asked %,d times over, on :memory ══" n reps))
-    (println (format "  %-36s %10s %12s" "" "µs/ask" "fetches"))
+    (printf  "\n══ a %,d-node closure asked %,d times over, on :memory ══\n" n reps)
+    (printf  "  %-36s %10s %12s\n" "" "µs/ask" "fetches")
     (println (str "  " (apply str (repeat 62 \-))))
-    (println (format "  %-36s %10.1f %,12d" "first ask, literal cache cleared" (* 1000.0 c) cn))
-    (println (format "  %-36s %10.1f %,12d" "repeat, cache warm" (* 1000.0 warm) wn))
-    (println (format "  %-36s %10.1f %12s" "repeat, cache off" (* 1000.0 bare) "—"))
-    (println (format "  %-36s %10.1f %12s" "closed one-hop ask (dispatch floor)" (* 1000.0 floor) "—"))
-    (println (format "  → turning the literal cache off moves a repeat by %.2f×, and %.0f%% of"
-                     (/ bare warm) (* 100.0 (/ floor warm))))
+    (printf  "  %-36s %10.1f %,12d\n" "first ask, literal cache cleared" (* 1000.0 c) cn)
+    (printf  "  %-36s %10.1f %,12d\n" "repeat, cache warm" (* 1000.0 warm) wn)
+    (printf  "  %-36s %10.1f %12s\n" "repeat, cache off" (* 1000.0 bare) "—")
+    (printf  "  %-36s %10.1f %12s\n" "closed one-hop ask (dispatch floor)" (* 1000.0 floor) "—")
+    (printf  "  → turning the literal cache off moves a repeat by %.2f×, and %.0f%% of\n"
+             (/ bare warm) (* 100.0 (/ floor warm)))
     (println "    what a repeat costs is the per-ask dispatch rather than the closure.")))
 
 (defn -main [& args]

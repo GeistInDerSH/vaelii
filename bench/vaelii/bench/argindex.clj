@@ -212,18 +212,18 @@
         handles (double (/ (ffirst raws) subjects))
         matched (double (/ (ffirst mats) subjects))
         sift    (fmt-sift (micro-sift kb ctx subjects))]
-    (println (format "  fanout %,6d | lookup %7.2f µs (%,.0f handles) | walk %8.2f µs | full match %8.2f µs (%,.0f matched) | returned/matched %,.0f/%,.0f = %.1f×"
-                     (long (:fanout opts))
-                     (/ raw-ns 1000.0) handles
-                     (/ wlk-ns 1000.0)
-                     (/ mat-ns 1000.0) matched
-                     (double (:returned sift)) (double (:matched sift)) (:ratio sift)))
+    (printf "  fanout %,6d | lookup %7.2f µs (%,.0f handles) | walk %8.2f µs | full match %8.2f µs (%,.0f matched) | returned/matched %,.0f/%,.0f = %.1f×\n"
+            (long (:fanout opts))
+            (/ raw-ns 1000.0) handles
+            (/ wlk-ns 1000.0)
+            (/ mat-ns 1000.0) matched
+            (double (:returned sift)) (double (:matched sift)) (:ratio sift))
     {:fanout (:fanout opts) :lookup-us (/ raw-ns 1000.0) :walk-us (/ wlk-ns 1000.0)
      :match-us (/ mat-ns 1000.0) :handles handles :matched matched :sift sift}))
 
 (defn run-micro [opts]
-  (println (format "\n=== MICRO: one argument-root probe ===  subjects %,d, contexts %d, samples %d"
-                   (long (:subjects opts)) (long (:contexts opts)) (long (:samples opts))))
+  (printf  "\n=== MICRO: one argument-root probe ===  subjects %,d, contexts %d, samples %d\n"
+           (long (:subjects opts)) (long (:contexts opts)) (long (:samples opts)))
   (println "  lookup = p/sentexes-with-args [:argument-root relOf 1 Subj] hash probe (cache-free, O(1))")
   (println "  walk   = materializing the returned posting as a seq (the ~98%-alloc cost, O(width))")
   (println "  full match = res/matches-visible (relOf Subj ?y) from CxAsk (the clash-arm call)")
@@ -314,16 +314,16 @@
           _         (join-sweep kb ctx subjects obj)
           alloc     (- (all-thread-allocated) a0)
           sift      (join-sift kb ctx subjects obj)]
-      (println (format "  %-5s | probe %8.3f µs | alloc/sweep %,13d B | returned %,8.0f  unified %,7.0f  matched %,6.0f | ret/mat %5.1f×  uni/mat %5.1f×"
-                       (name strat) (/ per-probe 1000.0) (long alloc)
-                       (double (:returned sift)) (double (:unified sift)) (double (:matched sift))
-                       (:ratio sift) (:uni-ratio sift)))
+      (printf "  %-5s | probe %8.3f µs | alloc/sweep %,13d B | returned %,8.0f  unified %,7.0f  matched %,6.0f | ret/mat %5.1f×  uni/mat %5.1f×\n"
+              (name strat) (/ per-probe 1000.0) (long alloc)
+              (double (:returned sift)) (double (:unified sift)) (double (:matched sift))
+              (:ratio sift) (:uni-ratio sift))
       (assoc sift :strat strat :probe-us (/ per-probe 1000.0) :alloc alloc))))
 
 (defn run-join [opts]
-  (println (format "\n=== JOIN: multi-bound-argument narrowing ===  subjects %,d, fanout %,d, objects %d, contexts %d, samples %d"
-                   (long (:subjects opts)) (long (:fanout opts)) (long (:objects opts))
-                   (long (:contexts opts)) (long (:samples opts))))
+  (printf  "\n=== JOIN: multi-bound-argument narrowing ===  subjects %,d, fanout %,d, objects %d, contexts %d, samples %d\n"
+           (long (:subjects opts)) (long (:fanout opts)) (long (:objects opts))
+           (long (:contexts opts)) (long (:samples opts)))
   (println "  probe (relT Subj Obj ?z) — column 1 (Subj) wide, column 2 (Obj) locally 1/objects selective")
   (println "  :off = pre-v3 single leading column; :two/:all/:gated intersect the argument roots")
   (println "  unified = candidates reaching unify (the metric v3 moves); matched = survivors")
@@ -331,19 +331,19 @@
         ctx (build-join! kb opts)
         obj (obj-name 0)]
     (v/reindex kb)
-    (println (format "  built %,d sentexes\n" (long (v/sentex-count kb))))
+    (printf "  built %,d sentexes\n\n" (long (v/sentex-count kb)))
     (let [rows (doall (map #(run-join-strategy kb ctx opts obj %) [:off :two :all :gated]))
           base (first (filter #(= :off (:strat %)) rows))
           two  (first (filter #(= :two (:strat %)) rows))]
       (when (zero? (long (:matched base)))
         (println "\n  WARNING: zero matches — knobs left the probe object invisible; pick fanout ≥ lcm(objects,contexts)"))
       (when (and base two (pos? (long (:matched base))))
-        (println (format "\n  :off → :two  returned %,.0f → %,.0f (%.1f× fewer)  |  unified %,.0f → %,.0f (%.1f× fewer)  |  answer set identical (matched %,.0f = %,.0f)"
-                         (double (:returned base)) (double (:returned two))
-                         (/ (double (:returned base)) (max 1.0 (double (:returned two))))
-                         (double (:unified base)) (double (:unified two))
-                         (/ (double (:unified base)) (max 1.0 (double (:unified two))))
-                         (double (:matched base)) (double (:matched two)))))
+        (printf "\n  :off → :two  returned %,.0f → %,.0f (%.1f× fewer)  |  unified %,.0f → %,.0f (%.1f× fewer)  |  answer set identical (matched %,.0f = %,.0f)\n"
+                (double (:returned base)) (double (:returned two))
+                (/ (double (:returned base)) (max 1.0 (double (:returned two))))
+                (double (:unified base)) (double (:unified two))
+                (/ (double (:unified base)) (max 1.0 (double (:unified two))))
+                (double (:matched base)) (double (:matched two))))
       (println)
       rows)))
 
@@ -420,22 +420,22 @@
         rec-bytes   (- (all-thread-allocated) a0)
         contras     (count (v/contradictions kb))
         viols       (count (v/violations kb))]
-    (println (format "  reindex   %8.2f s   (%,d sentexes, %,d rules)"
-                     (/ ix-ns 1e9) (long (:sentexes res)) (long (:rules res))))
-    (println (format "  recover   %8.2f s   (the belief-settle hot path)" (/ rec-ns 1e9)))
-    (println (format "  allocated %,d bytes  (%.1f MB, %,.0f B/sentex) during recover"
-                     rec-bytes (/ rec-bytes 1048576.0) (double (/ rec-bytes (max 1 n)))))
-    (println (format "  belief: %,d contradictions, %,d violations" contras viols))
+    (printf "  reindex   %8.2f s   (%,d sentexes, %,d rules)\n"
+            (/ ix-ns 1e9) (long (:sentexes res)) (long (:rules res)))
+    (printf "  recover   %8.2f s   (the belief-settle hot path)\n" (/ rec-ns 1e9))
+    (printf "  allocated %,d bytes  (%.1f MB, %,.0f B/sentex) during recover\n"
+            rec-bytes (/ rec-bytes 1048576.0) (double (/ rec-bytes (max 1 n))))
+    (printf "  belief: %,d contradictions, %,d violations\n" contras viols)
     ;; evidence: a profiled recover so the read tally attributes the sweep to the roots
     (println "\n  -- slow-path evidence: prof :reads over one recover --")
     (prof/start)
     (v/recover kb)
     (let [snap (prof/stop)
           {:keys [argument-root argument-slot functor-root context-root sift]} (read-summary snap)]
-      (println (format "  argument-root reads %,d | argument-slot reads %,d | functor-root %,d | context-root %,d"
-                       (long argument-root) (long argument-slot) (long functor-root) (long context-root)))
-      (println (format "  matches-hierarchical returned/matched: %,d / %,d = %.1f×"
-                       (long (:returned sift)) (long (:matched sift)) (:ratio sift)))
+      (printf "  argument-root reads %,d | argument-slot reads %,d | functor-root %,d | context-root %,d\n"
+              (long argument-root) (long argument-slot) (long functor-root) (long context-root))
+      (printf "  matches-hierarchical returned/matched: %,d / %,d = %.1f×\n"
+              (long (:returned sift)) (long (:matched sift)) (:ratio sift))
       (when (zero? (long argument-root))
         (println "  WARNING: zero argument-root reads — the clash sweep did not probe the roots (gate closed?)"))
       (println)
@@ -445,9 +445,9 @@
        :functor-root functor-root :context-root context-root :sift sift})))
 
 (defn- macro-header [tag opts]
-  (println (format "\n=== MACRO [%s]: reindex + recover ===  types %,d (branching %d), individuals %,d × %d memberships, %,d disjoint pairs, %,d clashes"
-                   tag (long (:types opts)) (long (:branching opts)) (long (:individuals opts))
-                   (long (:memberships opts)) (long (:disjoints opts)) (long (:clashes opts)))))
+  (printf "\n=== MACRO [%s]: reindex + recover ===  types %,d (branching %d), individuals %,d × %d memberships, %,d disjoint pairs, %,d clashes\n"
+          tag (long (:types opts)) (long (:branching opts)) (long (:individuals opts))
+          (long (:memberships opts)) (long (:disjoints opts)) (long (:clashes opts))))
 
 (defn- run-macro-open
   "Open a KB on `open-opts`, build the clash-sweep corpus, and settle+report.  The corpus
@@ -459,7 +459,7 @@
              (v/clear!))
         [_ build-ns] (timed (build-macro! kb opts))
         n  (v/sentex-count kb)]
-    (println (format "  built %,d sentexes in %.1f s" (long n) (/ build-ns 1e9)))
+    (printf "  built %,d sentexes in %.1f s\n" (long n) (/ build-ns 1e9))
     (settle-and-report kb n)))
 
 (defn run-macro

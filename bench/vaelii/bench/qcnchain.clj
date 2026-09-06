@@ -75,12 +75,12 @@
       (println "  regions | no prover | prover, no rule | prover + rule | deferred chaining")
       (println "  --------------------------------------------------------------------------")
       (doseq [n sizes]
-        (println (format "  %7d | %9.1f | %15.1f | %13.1f | %17.1f"
-                         n
-                         (best #(scenario shape n false false false))
-                         (best #(scenario shape n true false false))
-                         (best #(scenario shape n true true false))
-                         (best #(scenario shape n true true true)))))
+        (printf "  %7d | %9.1f | %15.1f | %13.1f | %17.1f\n"
+                n
+                (best #(scenario shape n false false false))
+                (best #(scenario shape n true false false))
+                (best #(scenario shape n true true false))
+                (best #(scenario shape n true true true))))
       (println))
     (println "  Reading:")
     (println "  - three things sit behind the prover+rule column. The network is RESIDENT")

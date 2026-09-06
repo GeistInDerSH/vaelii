@@ -593,10 +593,10 @@
           r (session/propose-page
              kb {:term penguin :context ctx :provider p
                  :message "flesh out what is true of these — where they live, what they eat"})]
-      (println (format "  [live] %s: ttfa %sms, total %sms, %s assertions, reuse %s/%s, coined %s"
-                       model (:first-assertion-ms r) (:elapsed-ms r) (:new (:summary r))
-                       (:reused (:vocabulary r)) (:literals (:vocabulary r))
-                       (:coined (:vocabulary r))))
+      (printf "  [live] %s: ttfa %sms, total %sms, %s assertions, reuse %s/%s, coined %s\n"
+              model (:first-assertion-ms r) (:elapsed-ms r) (:new (:summary r))
+              (:reused (:vocabulary r)) (:literals (:vocabulary r))
+              (:coined (:vocabulary r)))
       (is (contains? #{:ok :invalid} (:status r))
           (str "unexpected status " (:status r) " — " (pr-str (:text r))))
       (is (pos? (:proposed (:summary r))) "it wrote something")

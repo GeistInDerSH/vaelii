@@ -110,9 +110,9 @@
          :ms elapsed :ram (kb-ram kb)}))))
 
 (defn- report [{:keys [label facts rules-fwd derived factor derived-preds truncated? contradictions violations ms ram]}]
-  (println (format "  %-10s facts %,d | fwd-rules %,d | derived %,d (%.1f× base, %,d distinct preds) | truncated %s | contradictions %d, violations %d | %.0f ms | %.1f MB"
-                   label facts rules-fwd derived factor derived-preds (boolean truncated?)
-                   contradictions violations ms (/ (double ram) 1048576.0))))
+  (printf "  %-10s facts %,d | fwd-rules %,d | derived %,d (%.1f× base, %,d distinct preds) | truncated %s | contradictions %d, violations %d | %.0f ms | %.1f MB\n"
+          label facts rules-fwd derived factor derived-preds (boolean truncated?)
+          contradictions violations ms (/ (double ram) 1048576.0)))
 
 (defn -main [& args]
   (let [f   (or (some-> (first args) Long/parseLong) 3000)
@@ -123,12 +123,12 @@
         cfg {:facts f :rules r :preds (max 100 (quot r 4)) :base (max 20 (quot r 40))
              :inds f :seed 11 :layers layers}                  ; inds=facts → sparse joins
         phis (if phi [phi] [0.0 0.5 1.0])]
-    (println (format "vaelii corpus behaviour — %,d facts, %,d rules, %,d preds (%,d base), %d layers; ante mode 3–4, Zipf hot consequents, max-depth %d"
-                     f r (:preds cfg) (:base cfg) layers md))
+    (printf  "vaelii corpus behaviour — %,d facts, %,d rules, %,d preds (%,d base), %d layers; ante mode 3–4, Zipf hot consequents, max-depth %d\n"
+             f r (:preds cfg) (:base cfg) layers md)
     (println "derived/RAM/ledgers TRUSTED; wall-clock UNTRUSTED (ref:rete ratio is the signal).")
     (flush)
     (doseq [p phis]
-      (println (format "\n── φ = %.0f%% rules forward ──" (* 100 p)))
+      (printf "\n── φ = %.0f%% rules forward ──\n" (* 100 p))
       (flush)
       (let [data (gen (assoc cfg :phi p))
             ref  (load-run "reference" false md data)
@@ -136,8 +136,8 @@
         (report ref)
         (when ret
           (report ret)
-          (println (format "  → RETE forward-match speedup: %.1f×  (derived identical: %s)"
-                           (/ (:ms ref) (max 0.01 (:ms ret))) (= (:derived ref) (:derived ret)))))
+          (printf "  → RETE forward-match speedup: %.1f×  (derived identical: %s)\n"
+                  (/ (:ms ref) (max 0.01 (:ms ret))) (= (:derived ref) (:derived ret))))
         (flush)))
     (rete/disable!)
     (shutdown-agents)))

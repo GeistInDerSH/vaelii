@@ -73,8 +73,8 @@
   (dotimes [_ (max 1 (quot n 10))] (f))
   (let [[_ ns] (timed (dotimes [_ n] (f)))
         per    (double (/ ns n))]
-    (println (format "  %-20s %10.3f ms/call  %,12.0f calls/s"
-                     label (/ per 1e6) (/ 1e9 per)))
+    (printf "  %-20s %10.3f ms/call  %,12.0f calls/s\n"
+            label (/ per 1e6) (/ 1e9 per))
     per))
 
 (defn- run [{:keys [depth samples] :as opts}]
@@ -82,11 +82,11 @@
         _  (v/clear! kb)
         [_ build-ns] (timed (build! kb opts))
         gs (goals opts)]
-    (println (format "\nbuilt %,d sentexes in %.1f s — a %d-deep genl chain, %d claim(s)/predicate\n"
-                     (long (v/sentex-count kb)) (/ build-ns 1e9)
-                     (long depth) (long (:claims opts))))
-    (println (format "the reach of one preserved argument is %d terms, so k positions enumerate %d^k tuples"
-                     (long depth) (long depth)))
+    (printf  "\nbuilt %,d sentexes in %.1f s — a %d-deep genl chain, %d claim(s)/predicate\n\n"
+             (long (v/sentex-count kb)) (/ build-ns 1e9)
+             (long depth) (long (:claims opts)))
+    (printf  "the reach of one preserved argument is %d terms, so k positions enumerate %d^k tuples\n"
+             (long depth) (long depth))
     (println "\nthe primitives every layer calls")
     (let [g (gs 1)]
       (run-arm "positions" #(doall (inherit/positions kb (first g) ctx)) samples)
@@ -96,16 +96,16 @@
     (doseq [k [1 2 3]]
       (let [g (gs k)
             n (max 20 (quot samples (long (Math/pow depth (dec k)))))]
-        (println (format "\n%d preserved position(s) — %,d candidate tuples, goal %s"
-                         k (long (Math/pow depth k)) (pr-str g)))
+        (printf "\n%d preserved position(s) — %,d candidate tuples, goal %s\n"
+                k (long (Math/pow depth k)) (pr-str g))
         (run-arm "claims" #(count (inherit/claims kb g ctx)) n)
         (run-arm "verdict" #(inherit/verdict kb g ctx) n)
         (run-arm "ask?" #(v/ask? kb g ctx) n)))
     ;; the control: a predicate declaring nothing must pay none of this
     (println "\nthe control — a predicate with no preserved position")
     (run-arm "ask? (no decl)" #(v/ask? kb (list 'bq_unrelated_of (type-name 0)) ctx) samples)
-    (println (format "\nest-bindings reports %s for the 3-position goal"
-                     (provers/est-bindings (provers/->TransitiveInArgProver) kb (gs 3) ctx)))
+    (printf  "\nest-bindings reports %s for the 3-position goal\n"
+             (provers/est-bindings (provers/->TransitiveInArgProver) kb (gs 3) ctx))
     (println)))
 
 (defn- parse-args [args]

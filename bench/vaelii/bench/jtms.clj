@@ -107,24 +107,24 @@
                        :classes :superseded]]
                 [k (retained [(get state k)]) (count (get state k))])]
     (println "\n══ Phase 3.1: the JTMS by key ══")
-    (println (format "  %-12s %10s %12s %8s" "key" "MB" "entries" "%"))
+    (printf  "  %-12s %10s %12s %8s\n" "key" "MB" "entries" "%")
     (println (str "  " (apply str (repeat 46 \-))))
     (doseq [[k b n] rows]
-      (println (format "  %-12s %10.1f %12s %7.0f%%"
-                       (name k) (mb b) (format "%,d" n) (* 100.0 (/ (double b) total)))))
-    (println (format "  %-12s %10.1f  (the whole atom, deduped)" "TOTAL" (mb total)))
+      (printf "  %-12s %10.1f %12s %7.0f%%\n"
+              (name k) (mb b) (format "%,d" n) (* 100.0 (/ (double b) total))))
+    (printf "  %-12s %10.1f  (the whole atom, deduped)\n" "TOTAL" (mb total))
     total))
 
 (defn- by-node-field [state total]
   (let [nodes (count (:nodes state))
         base  (retained [state])]
     (println "\n══ Phase 3.2: within :nodes, what each field costs ══")
-    (println (format "  %,d nodes; each row is what STRIPPING that field releases" nodes))
-    (println (format "  %-20s %10s %12s" "field" "MB" "B/node"))
+    (printf  "  %,d nodes; each row is what STRIPPING that field releases\n" nodes)
+    (printf  "  %-20s %10s %12s\n" "field" "MB" "B/node")
     (println (str "  " (apply str (repeat 46 \-))))
     (doseq [k [:supports :consequences :depth :premise? :premise-strength :datum]]
       (let [b (- base (retained [(strip-node-field state k)]))]
-        (println (format "  %-20s %10.1f %12.1f" (name k) (mb b) (/ (double b) nodes)))))
+        (printf "  %-20s %10.1f %12.1f\n" (name k) (mb b) (/ (double b) nodes))))
     ;; what is left once every field is stripped is the per-node map object and the HAMT
     ;; holding it — nothing to do with the fields, and the reason the fix is to stop
     ;; having a map per node rather than to shrink the fields (they are shared objects
@@ -132,9 +132,9 @@
     (let [bare (retained [(reduce strip-node-field state
                                   [:supports :consequences :depth :premise?
                                    :premise-strength :datum])])]
-      (println (format "  %-20s %10.1f %12.1f  (the node map + HAMT itself — the residue)"
-                       "structure" (mb bare) (/ (double bare) nodes))))
-    (println (format "  (the whole JTMS is %.1f MB = %.0f B/node)" (mb total) (/ (double total) nodes)))))
+      (printf "  %-20s %10.1f %12.1f  (the node map + HAMT itself — the residue)\n"
+              "structure" (mb bare) (/ (double bare) nodes)))
+    (printf "  (the whole JTMS is %.1f MB = %.0f B/node)\n" (mb total) (/ (double total) nodes))))
 
 (defn- store-independence
   "A node names its datum by handle and holds no reference to the sentex it labels, so
@@ -146,8 +146,8 @@
   (let [pinned (into [] (keep :sentex) (vals (:nodes state)))
         recs   (retained [@(:state (:records kb))])]
     (println "\n══ Phase 3.3: what the JTMS pins of the record store ══")
-    (println (format "  %,d of %,d nodes hold a record reference; the store is %.1f MB"
-                     (count pinned) (count (:nodes state)) (mb recs)))
+    (printf  "  %,d of %,d nodes hold a record reference; the store is %.1f MB\n"
+             (count pinned) (count (:nodes state)) (mb recs))
     (println (if (seq pinned)
                (format "  REGRESSION: the nodes retain %.1f MB of it — record paging is defeated"
                        (mb (retained pinned)))
@@ -164,11 +164,11 @@
         roar-b (retained [roar])
         arr-b  (retained [ids])]
     (println "\n══ Phase 3.4: the belief sets — encodings at the real cardinality ══")
-    (println (format "  :in holds %,d of %,d nodes (%.0f%% — the DENSE regime, unlike the index's postings)"
-                     n (count (:nodes state)) (* 100.0 (/ (double n) (count (:nodes state))))))
-    (println (format "  %-28s %10.2f MB %8s" "PersistentHashSet<Long>" (mb boxed) "—"))
-    (println (format "  %-28s %10.2f MB %7.1f×" "sorted int[]" (mb arr-b) (/ (double boxed) arr-b)))
-    (println (format "  %-28s %10.2f MB %7.1f×" "RoaringBitmap" (mb roar-b) (/ (double boxed) roar-b)))
+    (printf  "  :in holds %,d of %,d nodes (%.0f%% — the DENSE regime, unlike the index's postings)\n"
+             n (count (:nodes state)) (* 100.0 (/ (double n) (count (:nodes state)))))
+    (printf  "  %-28s %10.2f MB %8s\n" "PersistentHashSet<Long>" (mb boxed) "—")
+    (printf  "  %-28s %10.2f MB %7.1f×\n" "sorted int[]" (mb arr-b) (/ (double boxed) arr-b))
+    (printf  "  %-28s %10.2f MB %7.1f×\n" "RoaringBitmap" (mb roar-b) (/ (double boxed) roar-b))
     (println "  (bench-postings found Roaring a LOSS on the index's tiny postings; a belief set is")
     (println "   the opposite regime, so that finding does not carry over and this is the one to use.)")))
 
@@ -189,23 +189,23 @@
         dns-kb  (build-kb n m st :dense)
         [dns-b dns-j] (size dns-kb)
         row     (fn [label b j vs]
-                  (println (format "  %-28s %8.1f %9.1f %9.1f %8s" label
-                                   (mb b) (mb (- b j)) (mb j) vs)))]
+                  (printf "  %-28s %8.1f %9.1f %9.1f %8s\n" label
+                          (mb b) (mb (- b j)) (mb j) vs))]
     (println "\n══ Phase 3.5: the two representations, same KB ══")
-    (println (format "  %-28s %8s %9s %9s %8s"
-                     "representation" "total" "graph" "justs" "vs ref"))
+    (printf  "  %-28s %8s %9s %9s %8s\n"
+             "representation" "total" "graph" "justs" "vs ref")
     (println (str "  " (apply str (repeat 68 \-))))
     (row ":reference (atom + map)" ref-b ref-j "—")
     (row ":dense (bitmaps + int maps)" dns-b dns-j (format "%.2fx" (/ (double ref-b) dns-b)))
-    (println (format "  %,d nodes: %.0f -> %.0f B/node overall, and %.0f -> %.0f on the graph alone"
-                     nodes (/ (double ref-b) nodes) (/ (double dns-b) nodes)
-                     (/ (double (- ref-b ref-j)) nodes) (/ (double (- dns-b dns-j)) nodes)))
+    (printf "  %,d nodes: %.0f -> %.0f B/node overall, and %.0f -> %.0f on the graph alone\n"
+            nodes (/ (double ref-b) nodes) (/ (double dns-b) nodes)
+            (/ (double (- ref-b ref-j)) nodes) (/ (double (- dns-b dns-j)) nodes))
     ;; The justification share, which is where the phase's last lever was spent: the
     ;; reference holds a record per justification, the dense one holds columns and no
     ;; object at all.  3.7 below is what one shape of corpus shows; 3.6/3.7 measure the
     ;; shape where it actually dominates.
-    (println (format "  justifications are %.0f%% of the dense network at this (fact-heavy) shape"
-                     (* 100.0 (/ (double dns-j) dns-b))))
+    (printf  "  justifications are %.0f%% of the dense network at this (fact-heavy) shape\n"
+             (* 100.0 (/ (double dns-j) dns-b)))
     (println "  (identical answers: jtms_dense_oracle_test, and the whole suite runs green through it)")))
 
 ;; ---- the rules-heavy corpus, and what a justification costs -------------
@@ -258,19 +258,19 @@
         n    (count js)
         base (retained [js])]
     (println "\n══ Phase 3.6: within :justs, what each field costs ══")
-    (println (format "  %,d justifications; each row is what STRIPPING that field releases" n))
-    (println (format "  %-20s %10s %11s %8s" "field" "MB" "B/just" "%"))
+    (printf  "  %,d justifications; each row is what STRIPPING that field releases\n" n)
+    (printf  "  %-20s %10s %11s %8s\n" "field" "MB" "B/just" "%")
     (println (str "  " (apply str (repeat 52 \-))))
     (doseq [k [:antecedents :bindings :consequence :id :informant :strength :out]]
       (let [b (- base (retained [(:justs (strip-just-field state k))]))]
-        (println (format "  %-20s %10.2f %11.1f %7.0f%%"
-                         (name k) (mb b) (/ (double b) n) (* 100.0 (/ (double b) base))))))
+        (printf "  %-20s %10.2f %11.1f %7.0f%%\n"
+                (name k) (mb b) (/ (double b) n) (* 100.0 (/ (double b) base)))))
     (let [bare (retained [(:justs (reduce strip-just-field state
                                           [:antecedents :bindings :consequence :id
                                            :informant :strength :out]))])]
-      (println (format "  %-20s %10.2f %11.1f %7.0f%%  (the record object + its map slot)"
-                       "structure" (mb bare) (/ (double bare) n) (* 100.0 (/ (double bare) base)))))
-    (println (format "  TOTAL                %10.2f %11.1f" (mb base) (/ (double base) n)))))
+      (printf "  %-20s %10.2f %11.1f %7.0f%%  (the record object + its map slot)\n"
+              "structure" (mb bare) (/ (double bare) n) (* 100.0 (/ (double bare) base))))
+    (printf "  TOTAL                %10.2f %11.1f\n" (mb base) (/ (double base) n))))
 
 (defn- join-representations
   "3.5 again on the rules-heavy corpus — where the justification copy, not the node
@@ -283,23 +283,23 @@
         state   @(:tms ref-kb)
         nodes   (count (:nodes state))
         justs   (count (:justs state))]
-    (println (format "\n══ Phase 3.7: the rules-heavy corpus — %,d nodes, %,d justifications (%.1f per node) ══"
-                     nodes justs (/ (double justs) nodes)))
+    (printf "\n══ Phase 3.7: the rules-heavy corpus — %,d nodes, %,d justifications (%.1f per node) ══\n"
+            nodes justs (/ (double justs) nodes))
     (by-just-field state)
     (p/clear-records! (:records ref-kb))
     (let [dns-kb  (build-join-kb inds edges st :dense)
           [dns-b dns-j] (size dns-kb)
           row     (fn [label b j vs]
-                    (println (format "  %-28s %8.1f %9.1f %9.1f %8s" label
-                                     (mb b) (mb (- b j)) (mb j) vs)))]
+                    (printf "  %-28s %8.1f %9.1f %9.1f %8s\n" label
+                            (mb b) (mb (- b j)) (mb j) vs))]
       (println "\n  the two representations at this shape:")
-      (println (format "  %-28s %8s %9s %9s %8s"
-                       "representation" "total" "graph" "justs" "vs ref"))
+      (printf "  %-28s %8s %9s %9s %8s\n"
+              "representation" "total" "graph" "justs" "vs ref")
       (println (str "  " (apply str (repeat 68 \-))))
       (row ":reference (atom + map)" ref-b ref-j "—")
       (row ":dense (bitmaps + int maps)" dns-b dns-j (format "%.2fx" (/ (double ref-b) dns-b)))
-      (println (format "  the justification copy is %.0f%% of the dense network here (%.0f B each)"
-                       (* 100.0 (/ (double dns-j) dns-b)) (/ (double dns-j) justs))))))
+      (printf "  the justification copy is %.0f%% of the dense network here (%.0f B each)\n"
+              (* 100.0 (/ (double dns-j) dns-b)) (/ (double dns-j) justs)))))
 
 (defn -main [& args]
   (let [n  (or (some-> (first args) Long/parseLong) 100000)
@@ -310,8 +310,8 @@
         st (keyword (or (nth args 2 nil) "default"))
         kb (build-kb n m st)
         state @(:tms kb)]
-    (println (format "vaelii Phase-3 JTMS measurement — %,d nodes, %,d justifications, facts at %s"
-                     (count (:nodes state)) (count (:justs state)) st))
+    (printf "vaelii Phase-3 JTMS measurement — %,d nodes, %,d justifications, facts at %s\n"
+            (count (:nodes state)) (count (:justs state)) st)
     (println "Density (jol retained heap) is TRUSTED — structural, so contention-immune.")
     (let [total (by-key state)]
       (by-node-field state total)

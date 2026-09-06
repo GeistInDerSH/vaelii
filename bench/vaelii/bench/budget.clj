@@ -391,7 +391,7 @@
         ;; run down — a bench that dies on the last row has measured nothing.
         other-o  (try (doall (map #(get kb %) other-fields))
                       (catch Throwable t
-                        (println (format "    (other: not measured — %s)" (.getMessage t)))
+                        (printf "    (other: not measured — %s)\n" (.getMessage t))
                         nil))]
     (merge {:index    (:whole idx)
             :sections (dissoc idx :whole)}
@@ -631,44 +631,44 @@
 (defn- print-header [{:keys [facts requested nodes justs j-n]} backends]
   ;; requested beside stored, because the Zipf draw behind the corpus dedups and the
   ;; shortfall is otherwise invisible — the fact ratios below are the stored ones
-  (println (format "\n  N = %,d facts / %,d nodes / %,d justifications / j-n %.2f   (%,d ground facts asked for)"
-                   facts nodes justs j-n requested))
-  (println (format "    %-38s %s" "" (str/join "  " (map #(format "%14s" (name %)) backends)))))
+  (printf "\n  N = %,d facts / %,d nodes / %,d justifications / j-n %.2f   (%,d ground facts asked for)\n"
+          facts nodes justs j-n requested)
+  (printf "    %-38s %s\n" "" (str/join "  " (map #(format "%14s" (name %)) backends))))
 
 (defn- print-rows [by-backend backends]
   (doseq [k row-order]
-    (println (format "    %-38s %s" (row-labels k)
-                     (str/join "  " (for [b backends]
-                                      (format "%14s" (fmt-bytes (:heap (get-in by-backend [b :heap-rows k])))))))))
-  (println (format "    %-38s %s" "  ── mapped (not heap)"
-                   (str/join "  " (for [b backends]
-                                    (format "%14s" (fmt-bytes (get-in by-backend [b :mapped-total])))))))
+    (printf "    %-38s %s\n" (row-labels k)
+            (str/join "  " (for [b backends]
+                             (format "%14s" (fmt-bytes (:heap (get-in by-backend [b :heap-rows k]))))))))
+  (printf "    %-38s %s\n" "  ── mapped (not heap)"
+          (str/join "  " (for [b backends]
+                           (format "%14s" (fmt-bytes (get-in by-backend [b :mapped-total]))))))
   ;; The rows are measured from their own roots, so anything two of them share is counted
   ;; twice; the KB's own retained heap counts it once.  The gap between them is that
   ;; sharing, and it is printed rather than reconciled away — a row are indistinguishable from a *share* of
   ;; the total is only as good as this line is small.
-  (println (format "    %-38s %s" "  sum of rows"
-                   (str/join "  " (for [b backends]
-                                    (format "%14s" (fmt-bytes (reduce + 0 (map (comp :heap second)
-                                                                               (:rows (get by-backend b))))))))))
+  (printf "    %-38s %s\n" "  sum of rows"
+          (str/join "  " (for [b backends]
+                           (format "%14s" (fmt-bytes (reduce + 0 (map (comp :heap second)
+                                                                      (:rows (get by-backend b)))))))))
   ;; A self-check rather than a reconciliation: the rows ARE increments over one
   ;; accumulating walk, so these agree by construction and a disagreement means a walk
   ;; failed rather than that a structure was missed.
-  (println (format "    %-38s %s" "  the accumulated walk (self-check)"
-                   (str/join "  " (for [b backends]
-                                    (format "%14s" (fmt-bytes (:heap (:whole (get by-backend b))))))))))
+  (printf "    %-38s %s\n" "  the accumulated walk (self-check)"
+          (str/join "  " (for [b backends]
+                           (format "%14s" (fmt-bytes (:heap (:whole (get by-backend b)))))))))
 
 (defn- print-sections [by-backend backends]
   (when (some #(seq (get-in by-backend [% :sections])) backends)
     (println "\n    the index store's sections (heap unless marked mapped):")
     (doseq [k section-order]
-      (println (format "    %-38s %s" (str "      " (section-labels k))
-                       (str/join "  " (for [b backends]
-                                        (let [s (get-in by-backend [b :sections k])]
-                                          (format "%14s"
-                                                  (cond (nil? s) "—"
-                                                        (pos? (long (:mapped s))) (str (fmt-bytes (:mapped s)) " map")
-                                                        :else (fmt-bytes (:heap s))))))))))))
+      (printf "    %-38s %s\n" (str "      " (section-labels k))
+              (str/join "  " (for [b backends]
+                               (let [s (get-in by-backend [b :sections k])]
+                                 (format "%14s"
+                                         (cond (nil? s) "—"
+                                               (pos? (long (:mapped s))) (str (fmt-bytes (:mapped s)) " map")
+                                               :else (fmt-bytes (:heap s)))))))))))
 
 (defn- heap-rows [m] (into {} (:rows m)))
 
@@ -679,43 +679,43 @@
         by-size (mapv (fn [n] (prep (into {} (for [b backends] [b (measure b n individuals j-n)]))))
                       [facts (* facts step) (* facts step step) (* facts step step step)])
         any     (first backends)]
-    (println (format "\n══ the residency budget, %s ══"
-                     (str/join " · " (map name backends))))
+    (printf "\n══ the residency budget, %s ══\n"
+            (str/join " · " (map name backends)))
     (doseq [size by-size]
       (print-header (get size any) backends)
       (print-rows size backends)
       (print-sections size backends))
 
-    (println (format "\n  ── extrapolated to %,d facts, against %d GB ──" target budget-gb))
+    (printf "\n  ── extrapolated to %,d facts, against %d GB ──\n" target budget-gb)
     (doseq [b backends]
       (let [per    (mapv #(get % b) by-size)
             newest (peek per)]
-        (println (format "\n    %s" (name b)))
+        (printf "\n    %s\n" (name b))
         (let [totals
               (for [k row-order]
                 (let [pts       (mapv (fn [m] [(:facts m) (long (:heap (get-in m [:heap-rows k])))]) per)
                       [ext why] (if-let [cap (get capped-rows k)]
                                   (capped-estimate (cap) newest (second (peek pts)))
                                   (extrapolate pts target))]
-                  (println (format "      %-36s %s  %s"
-                                   (row-labels k)
-                                   (str/join " -> " (map #(format "%9s" (fmt-bytes (second %))) pts))
-                                   (if ext (str (fmt-bytes ext) "  (" why ")")
-                                       (str "NOT EXTRAPOLATED — " why))))
+                  (printf "      %-36s %s  %s\n"
+                          (row-labels k)
+                          (str/join " -> " (map #(format "%9s" (fmt-bytes (second %))) pts))
+                          (if ext (str (fmt-bytes ext) "  (" why ")")
+                              (str "NOT EXTRAPOLATED — " why)))
                   ext))
               known (reduce + 0 (remove nil? totals))
               gaps  (count (filter nil? totals))]
-          (println (format "      %-36s %33s %s"
-                           "TOTAL (extrapolated rows only)" "" (fmt-bytes known)))
-          (println (format "      %-36s %33s %s"
-                           (format "against %d GB" budget-gb) ""
-                           (let [x (/ (gb known) (double budget-gb))]
-                             (format "%s %.2fx%s"
-                                     (if (<= x 1.0) "OK" "OVER") x
-                                     (if (pos? gaps)
-                                       (format "  (+%d row%s not extrapolated — a floor, not a total)"
-                                               gaps (if (= 1 gaps) "" "s"))
-                                       ""))))))
+          (printf "      %-36s %33s %s\n"
+                  "TOTAL (extrapolated rows only)" "" (fmt-bytes known))
+          (printf "      %-36s %33s %s\n"
+                  (format "against %d GB" budget-gb) ""
+                  (let [x (/ (gb known) (double budget-gb))]
+                    (format "%s %.2fx%s"
+                            (if (<= x 1.0) "OK" "OVER") x
+                            (if (pos? gaps)
+                              (format "  (+%d row%s not extrapolated — a floor, not a total)"
+                                      gaps (if (= 1 gaps) "" "s"))
+                              "")))))
         ;; The index row above is one number over an image whose sections do not share a
         ;; shape: the CSR skeleton is path-scaled, the dictionary and the roots' key
         ;; columns are vocabulary-bounded, the scope table is bounded by predicates ×
@@ -726,7 +726,7 @@
         ;; A DECOMPOSITION of the index row, never an addition to it: these bytes are
         ;; already counted above, and summing them into the total would double them.
         (when (seq (:sections newest))
-          (println (format "\n      %s" "the image's sections — a decomposition of the index row, not an addition to it"))
+          (println "\n      the image's sections — a decomposition of the index row, not an addition to it")
           (doseq [k section-order
                   :let [sec (get-in newest [:sections k])]
                   :when sec]
@@ -736,11 +736,11 @@
                                       (if (pos? d) d (long (:heap x)))))
                   pts       (mapv (fn [m] [(:facts m) (bytes-of m)]) per)
                   [ext why] (extrapolate pts target)]
-              (println (format "        %-36s %s  %s"
-                               (str (section-labels k) (when mapped? "  [mapped]"))
-                               (str/join " -> " (map #(format "%9s" (fmt-bytes (second %))) pts))
-                               (if ext (str (fmt-bytes ext) "  (" why ")")
-                                   (str "NOT EXTRAPOLATED — " why))))))))))
+              (printf "        %-36s %s  %s\n"
+                      (str (section-labels k) (when mapped? "  [mapped]"))
+                      (str/join " -> " (map #(format "%9s" (fmt-bytes (second %))) pts))
+                      (if ext (str (fmt-bytes ext) "  (" why ")")
+                          (str "NOT EXTRAPOLATED — " why)))))))))
   (println (str "\n  Read the four sizes across, then the shape.  A row that tracks the\n"
                 "  vocabulary is flat; one that tracks the extent is linear; one with a fixed\n"
                 "  baseline over it is affine; one bounded by config is read off its cap.  Each\n"
@@ -761,7 +761,7 @@
         target      (Long/parseLong (or (nth args 3 nil) "100000000"))
         budget-gb   (Long/parseLong (or (nth args 4 nil) "40"))]
     (doseq [j-n [0.5 1.1]]
-      (println (format "\n\n════ j/n target %.1f ════" j-n))
+      (printf "\n\n════ j/n target %.1f ════\n" j-n)
       (run facts step individuals j-n target budget-gb [:disk-log :disk-snapshot]))
     (println (str "\n  :pg-disk-log is not measured here: the Postgres records live in the\n"
                   "  com.vaelii/postgres adapter, which the engine does not depend on, so this\n"

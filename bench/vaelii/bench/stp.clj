@@ -252,16 +252,16 @@
     (println)
     (println "vaelii metric-temporal closure — chain networks, integer magnitudes")
     (println)
-    (println (format "%9s %7s %9s %10s %9s %10s %9s %8s %10s %9s"
-                     "instants" "stated" "scratch" "add→close" "add→warm"
-                     "grow→close" "grow→warm" "KB read" "add→query" "memo hit"))
-    (println (format "%9s %7s %9s %10s %9s %10s %9s %8s %10s %9s"
-                     "" "" "ms" "ms/add" "ms/add" "ms/add" "ms/add" "ms" "ms/add" "ms/ask"))
+    (printf  "%9s %7s %9s %10s %9s %10s %9s %8s %10s %9s\n"
+             "instants" "stated" "scratch" "add→close" "add→warm"
+             "grow→close" "grow→warm" "KB read" "add→query" "memo hit")
+    (printf  "%9s %7s %9s %10s %9s %10s %9s %8s %10s %9s\n"
+             "" "" "ms" "ms/add" "ms/add" "ms/add" "ms/add" "ms" "ms/add" "ms/ask")
     (doseq [n sizes]
       (let [{:keys [instants constraints scratch-ms add-close-ms add-warm-ms
                     grow-close-ms grow-warm-ms kb-read-ms query-ms memo-hit-ms]} (row n)]
-        (println (format "%9d %7d %9.3f %10.3f %9.3f %10.3f %9.3f %8.3f %10.3f %9.4f"
-                         instants constraints scratch-ms add-close-ms add-warm-ms
-                         grow-close-ms grow-warm-ms kb-read-ms query-ms memo-hit-ms))))
+        (printf "%9d %7d %9.3f %10.3f %9.3f %10.3f %9.3f %8.3f %10.3f %9.4f\n"
+                instants constraints scratch-ms add-close-ms add-warm-ms
+                grow-close-ms grow-warm-ms kb-read-ms query-ms memo-hit-ms)))
     (println)
     (shutdown-agents)))

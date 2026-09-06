@@ -40,7 +40,7 @@
 
 (def ^:private rule
   '(implies (and (node ?x) (agg/count ?n ?a (ancestorOf ?a ?x)))
-             (ancestorCount ?x ?n)))
+            (ancestorCount ?x ?n)))
 
 (defn- scenario
   "Load a chain of `n` nodes and return the milliseconds it took.  `when-rule` is
@@ -76,13 +76,13 @@
     (println "  nodes | no rule | rule first | deferred chaining | one edit | rule last")
     (println "  -------------------------------------------------------------------------")
     (doseq [n sizes]
-      (println (format "  %5d | %7.1f | %10.1f | %17.1f | %8.1f | %9.1f"
-                       n
-                       (best #(scenario n :none  :assert))
-                       (best #(scenario n :first :assert))
-                       (best #(scenario n :first :defer))
-                       (best #(scenario n :first :edit))
-                       (best #(scenario n :last  :assert)))))
+      (printf "  %5d | %7.1f | %10.1f | %17.1f | %8.1f | %9.1f\n"
+              n
+              (best #(scenario n :none  :assert))
+              (best #(scenario n :first :assert))
+              (best #(scenario n :first :defer))
+              (best #(scenario n :first :edit))
+              (best #(scenario n :last  :assert))))
     (println)
     (println "  Reading:")
     (println "  - the shape is quadratic, and on purpose rather than by accident: every")

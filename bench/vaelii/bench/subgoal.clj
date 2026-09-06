@@ -302,11 +302,11 @@
 (defn- pct ^double [n d] (if (zero? (long d)) 0.0 (* 100.0 (/ (double n) (long d)))))
 
 (defn- census-row [label a]
-  (println (format "  %-30s %5d %7d %8d %7d %6.1f%% %7d %6.1f%% %7d %6.1f%%"
-                   label (:calls a) (:solves a) (:distinct a)
-                   (:within a) (pct (:within a) (:solves a))
-                   (:cross a) (pct (:cross a) (:solves a))
-                   (:cross-clock a) (pct (:cross-clock a) (:solves a)))))
+  (printf "  %-30s %5d %7d %8d %7d %6.1f%% %7d %6.1f%% %7d %6.1f%%\n"
+          label (:calls a) (:solves a) (:distinct a)
+          (:within a) (pct (:within a) (:solves a))
+          (:cross a) (pct (:cross a) (:solves a))
+          (:cross-clock a) (pct (:cross-clock a) (:solves a))))
 
 (defn- run-census!
   "Count the solves the sequence performs, arm by arm — then again over a second,
@@ -336,8 +336,8 @@
             p2  (filterv #(>= (long (first %)) n) all)]
         (println)
         (println "=== census: solve-goal invocations by [canonical goal, context, prover set] ===")
-        (println (format "  %-30s %5s %7s %8s %15s %15s %15s"
-                         "" "calls" "solves" "distinct" "within" "cross" "cross@clock"))
+        (printf  "  %-30s %5s %7s %8s %15s %15s %15s\n"
+                 "" "calls" "solves" "distinct" "within" "cross" "cross@clock")
         (doseq [[label lo hi] bounds]
           (census-row label (analyse (filterv #(and (<= (long lo) (long (first %)))
                                                     (< (long (first %)) (long hi)))
@@ -360,7 +360,7 @@
         (println)
         (println "  most-repeated keys, both passes:")
         (doseq [[k c] (take 8 (sort-by (comp - val) (frequencies (map second all))))]
-          (println (format "    %5d  %s" c (pr-str k))))))))
+          (printf "    %5d  %s\n" c (pr-str k)))))))
 
 ;; ---- the koinii conversation ---------------------------------------------
 
@@ -416,11 +416,11 @@
                 moves  (count (distinct (map second reads)))]
             (println)
             (println "=== the koinii arm: a conversation, reported apart ===")
-            (println (format "  %-30s %5s %7s %8s %15s %15s %15s"
-                             "" "calls" "solves" "distinct" "within" "cross" "cross@clock"))
+            (printf  "  %-30s %5s %7s %8s %15s %15s %15s\n"
+                     "" "calls" "solves" "distinct" "within" "cross" "cross@clock")
             (census-row "E  koinii conversation" (analyse all))
-            (println (format "  %d reads, over %d distinct change-clock values — a read shares a clock"
-                             (count reads) moves))
+            (printf  "  %d reads, over %d distinct change-clock values — a read shares a clock\n"
+                     (count reads) moves)
             (println "  with an earlier read only where no speech act fell between them.")))))))
 
 ;; ---- the replay ----------------------------------------------------------
@@ -454,8 +454,8 @@
     (vreset! tabling false)
     (let [o (median @off) t (median @on)
           h (.get hits) m (.get misses)]
-      (println (format "  %-32s %8.1f %8.1f   %6.3fx   %6d / %6d  %5.1f%%"
-                       label o t (/ (double o) (double t)) h (+ h m) (pct h (+ h m)))))))
+      (printf "  %-32s %8.1f %8.1f   %6.3fx   %6d / %6d  %5.1f%%\n"
+              label o t (/ (double o) (double t)) h (+ h m) (pct h (+ h m))))))
 
 (defn- comparable
   "The answers with the debugger's per-row wall clocks dropped — `compare-tacticians`
@@ -472,9 +472,9 @@
     (vreset! tabling true)  (time-runs! qs 2 (fn [_]))
     (vreset! tabling false) (reset! table {})
     (println)
-    (println (format "=== replay: prototype table off vs on, %d interleaved repetitions, medians ===" reps))
-    (println (format "  %-32s %8s %8s   %7s   %15s %6s"
-                     "" "off ms" "on ms" "speedup" "table hits" ""))
+    (printf "=== replay: prototype table off vs on, %d interleaved repetitions, medians ===\n" reps)
+    (printf "  %-32s %8s %8s   %7s   %15s %6s\n"
+            "" "off ms" "on ms" "speedup" "table hits" "")
     (ab! "one pass, each question once"    qs 1 (fn [_]) reps)
     (ab! "five passes, nothing written"    qs 5 (fn [_]) reps)
     (ab! "five passes, one write between"  qs 5 #(tick! kb %) reps)

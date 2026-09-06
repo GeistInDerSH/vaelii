@@ -117,8 +117,8 @@
         arrs    (mapv ->intarr sets)
         fasts   (mapv ->fastutil sets)
         rb (retained roars) ab (retained arrs) fb (retained fasts)]
-    (println (format "\n  %s — %,d postings, %,d entries" (name fam) (count sets) entries))
-    (println (format "  %-10s %9s %11s %10s %11s" "encoding" "postings" "entries" "MB" "B/entry"))
+    (printf  "\n  %s — %,d postings, %,d entries\n" (name fam) (count sets) entries)
+    (printf  "  %-10s %9s %11s %10s %11s\n" "encoding" "postings" "entries" "MB" "B/entry")
     (println (str "  " (apply str (repeat 54 \-))))
     (doseq [[lbl b] [["baseline" base] ["roaring" rb] ["int[]" ab] ["fastutil" fb]]]
       (println (str "  " (fmt-row lbl (count sets) entries b))))
@@ -136,7 +136,7 @@
             pairs {"hot ∩ hot"  [a b]
                    "hot ∩ rare" [a rare]}]
         (println "\n── intersection (UNTRUSTED absolute under contention; ratio is the signal) ──")
-        (println (format "  %-12s %5s %14s %12s %10s %12s" "pair" "|res|" "persistent ms" "roaring ms" "int[] ms" "fastutil ms"))
+        (printf  "  %-12s %5s %14s %12s %10s %12s\n" "pair" "|res|" "persistent ms" "roaring ms" "int[] ms" "fastutil ms")
         (doseq [[lbl [x y]] pairs]
           (let [rx (->roaring x) ry (->roaring y)
                 ax (->intarr x)  ay (->intarr y)
@@ -149,7 +149,7 @@
                 rms (run #(.getCardinality (RoaringBitmap/and rx ry)))
                 ims (run #(intarr-inter-count ax ay))
                 fms (run #(let [c ^IntOpenHashSet (.clone fx)] (.retainAll c fy) (.size c)))]
-            (println (format "  %-12s %5d %14.4f %12.4f %10.4f %12.4f" lbl res pms rms ims fms))))))))
+            (printf "  %-12s %5d %14.4f %12.4f %10.4f %12.4f\n" lbl res pms rms ims fms)))))))
 
 (defn survey-index
   "Measure an already-loaded kb's index: composition (posting values vs keys/nodes),
@@ -169,12 +169,12 @@
         idx-total (retained [state])
         val-total (retained (mapcat val by-fam))]
     (println "\n══ index composition (what Phase 1 can even touch) ══")
-    (println (format "  whole index map     : %.1f MB" (/ idx-total 1048576.0)))
-    (println (format "  posting VALUES       : %.1f MB  (%.0f%% of the index — Phase 1's target)"
-                     (/ val-total 1048576.0) (* 100.0 (/ (double val-total) idx-total))))
-    (println (format "  keys+counters+nodes  : %.1f MB  (%.0f%% — the residual: Phase 2's target)"
-                     (/ (- idx-total val-total) 1048576.0)
-                     (* 100.0 (/ (double (- idx-total val-total)) idx-total))))
+    (printf  "  whole index map     : %.1f MB\n" (/ idx-total 1048576.0))
+    (printf  "  posting VALUES       : %.1f MB  (%.0f%% of the index — Phase 1's target)\n"
+             (/ val-total 1048576.0) (* 100.0 (/ (double val-total) idx-total)))
+    (printf  "  keys+counters+nodes  : %.1f MB  (%.0f%% — the residual: Phase 2's target)\n"
+             (/ (- idx-total val-total) 1048576.0)
+             (* 100.0 (/ (double (- idx-total val-total)) idx-total)))
     (let [measured (into {} (map (fn [[f ps]] [f (measure-family f ps)])) by-fam)
           ;; TOTAL: baseline deduped across ALL families (a handle shared by :functor-root/:argument-root/
           ;; :term-index is one boxed Long counted once), vs the primitive encodings summed (no
@@ -186,19 +186,19 @@
           tot-arr  (reduce + (map :intarr (vals measured)))
           tot-fast (reduce + (map :fastutil (vals measured)))]
       (println "\n══ TOTAL across all handle-posting families ══")
-      (println (format "  %-10s %9s %11s %10s %11s %8s" "encoding" "postings" "entries" "MB" "B/entry" "vs base"))
+      (printf  "  %-10s %9s %11s %10s %11s %8s\n" "encoding" "postings" "entries" "MB" "B/entry" "vs base")
       (println (str "  " (apply str (repeat 62 \-))))
       (doseq [[lbl b] [["baseline" tot-base] ["roaring" tot-roar] ["int[]" tot-arr] ["fastutil" tot-fast]]]
-        (println (format "  %-10s %9s %11s %10.1f %11.1f %7.2f×"
-                         lbl (format "%,d" (count all-sets)) (format "%,d" tot-entries)
-                         (/ b 1048576.0) (double (/ b (max 1 tot-entries))) (/ (double tot-base) b))))
+        (printf  "  %-10s %9s %11s %10.1f %11.1f %7.2f×\n"
+                 lbl (format "%,d" (count all-sets)) (format "%,d" tot-entries)
+                 (/ b 1048576.0) (double (/ b (max 1 tot-entries))) (/ (double tot-base) b)))
       (println "\n── build cost (UNTRUSTED; ratio is the signal — the write-path tradeoff) ──")
       (doseq [[lbl f] [["roaring" ->roaring] ["int[]" ->intarr] ["fastutil" ->fastutil]]]
-        (println (format "  build all as %-9s : %.1f ms" lbl (time-build f all-sets))))
+        (printf "  build all as %-9s : %.1f ms\n" lbl (time-build f all-sets)))
       (intersection-bench measured)
       (let [ranked (sort-by second [[:baseline tot-base] [:roaring tot-roar] [:intarr tot-arr] [:fastutil tot-fast]])]
-        (println (format "\n▶ densest encoding: %s (%.2f× smaller than baseline). Density decides; intersection/build break ties."
-                         (name (ffirst ranked)) (/ (double tot-base) (second (first ranked)))))))))
+        (printf "\n▶ densest encoding: %s (%.2f× smaller than baseline). Density decides; intersection/build break ties.\n"
+                (name (ffirst ranked)) (/ (double tot-base) (second (first ranked))))))))
 
 (defn -main [& args]
   (let [n (or (some-> (first args) Long/parseLong) 200000)
@@ -210,7 +210,7 @@
              :compound-frac 0.1}
         kb (kb/open-kb {:backend :memory :space 24 :recover? false}
                        (fn [_] nil) (fn [_] nil))]
-    (println (format "vaelii posting-encoding bake-off — %,d synthetic facts" n))
+    (printf  "vaelii posting-encoding bake-off — %,d synthetic facts\n" n)
     (println "Density (jol retained heap) is TRUSTED; intersection/build wall-clock is UNTRUSTED under contention.")
     (p/clear-records! (:records kb)) (p/clear-index! (:index kb))
     (load! kb (java.util.Random. 42) cfg)

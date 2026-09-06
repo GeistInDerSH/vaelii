@@ -292,15 +292,15 @@
             {sound false control true} (group-by #(contains? planted (:handle %)) (:judged r))
             a (oracle/agreement (assoc r :judged sound))
             c (oracle/agreement (assoc r :judged control))]
-        (println (format "\n%s judged %d claims in %d batches, %d ms"
-                         judging-model (:total (oracle/agreement r)) (:batches r) elapsed))
+        (printf  "\n%s judged %d claims in %d batches, %d ms\n"
+                 judging-model (:total (oracle/agreement r)) (:batches r) elapsed)
         (println "\nthe KB's own conclusions:\n" (oracle/report (assoc r :judged sound)))
         (println "\nthe planted falsehoods:\n" (oracle/report (assoc r :judged control)))
         ;; every control, verdict and all — which falsehood a judge let through is worth
         ;; more to a reader than the count of the ones it caught
         (doseq [{:keys [verdict text note]} (sort-by :text control)]
-          (println (format "  %-9s %s%s" (name verdict) text
-                           (if note (str "  — " note) ""))))
+          (printf "  %-9s %s%s\n" (name verdict) text
+                  (if note (str "  — " note) "")))
         (is (pos? (:total a)))
         (is (< (:unanswered a) (:total a))
             "a judge that answered nothing at all is a broken prompt, not a verdict")

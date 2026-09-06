@@ -2257,16 +2257,16 @@
 
 (defn- report [{:keys [name claim]} {:keys [small large ratio bound sizes status]}]
   (let [[s l] sizes]
-    (println (format "  %-20s %s" (clojure.core/name name)
-                     (case status
-                       :pass  "PASS"
-                       :fail  "FAIL"
-                       :noise "noise — below the gating floor, not judged")))
-    (println (format "    %s" claim))
-    (println (format "    n=%-6d %8.3f ms/op        n=%-6d %8.3f ms/op"
-                     s (/ small 1e6) l (/ large 1e6)))
+    (printf "  %-20s %s\n" (clojure.core/name name)
+            (case status
+              :pass  "PASS"
+              :fail  "FAIL"
+              :noise "noise — below the gating floor, not judged"))
+    (printf "    %s\n" claim)
+    (printf "    n=%-6d %8.3f ms/op        n=%-6d %8.3f ms/op\n"
+            s (/ small 1e6) l (/ large 1e6))
     (when-not (= :noise status)
-      (println (format "    growth %.2fx  (bound %.2fx)" ratio bound)))
+      (printf "    growth %.2fx  (bound %.2fx)\n" ratio bound))
     (println)))
 
 (defn- usage-exit [msg]
@@ -2301,8 +2301,8 @@
     (when (empty? selected)
       (println "no such check:" only "— have:" (mapv :name checks))
       (System/exit 2))
-    (println (format "\nvaelii performance gate — %d check(s), tolerance %.2fx%s\n"
-                     (count selected) (double tolerance) (if quick? ", quick" "")))
+    (printf "\nvaelii performance gate — %d check(s), tolerance %.2fx%s\n\n"
+            (count selected) (double tolerance) (if quick? ", quick" ""))
     (let [total   (count selected)
           ;; Every verdict is reported together at the end (below), so the run itself
           ;; emits nothing per check — a `perf-progress k/total name` marker on *err*
@@ -2313,27 +2313,27 @@
                     (fn [i c]
                       (let [r (run-check c tolerance quick?)]
                         (binding [*out* *err*]
-                          (println (format "perf-progress %d/%d %s"
-                                           (inc i) total (name (:name c))))
+                          (printf "perf-progress %d/%d %s\n"
+                                  (inc i) total (name (:name c)))
                           (flush))
                         [c r]))
                     selected))]
       (doseq [[c r] results] (report c r))
       (let [failed (filter (fn [[_ r]] (= :fail (:status r))) results)]
         (if (seq failed)
-          (do (println (format "%d of %d checks REGRESSED: %s"
-                               (count failed) (count results)
-                               (mapv (comp :name first) failed)))
+          (do (printf "%d of %d checks REGRESSED: %s\n"
+                      (count failed) (count results)
+                      (mapv (comp :name first) failed))
               (shutdown-agents)
               (System/exit 1))
           (let [noisy (filterv (fn [[_ r]] (= :noise (:status r))) results)]
             ;; the floor's whole point: a check too fast to gate says so instead of
             ;; turning into a green light nobody notices has stopped meaning anything
-            (println (format "%d check(s) ok%s"
-                             (- (count results) (count noisy))
-                             (if (seq noisy)
-                               (format ", %d below the gating floor — not judged: %s"
-                                       (count noisy) (mapv (comp :name first) noisy))
-                               "")))
+            (printf "%d check(s) ok%s\n"
+                    (- (count results) (count noisy))
+                    (if (seq noisy)
+                      (format ", %d below the gating floor — not judged: %s"
+                              (count noisy) (mapv (comp :name first) noisy))
+                      ""))
             (shutdown-agents)
             (System/exit 0)))))))

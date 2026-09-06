@@ -126,16 +126,16 @@
                 :root-arg :term-index :rule-index]
         total  (postings/retained [state])]
     (println "\n══ current index decomposition (where the memory is) ══")
-    (println (format "  %-16s %10s %10s %8s" "subsystem" "MB" "entries" "%"))
+    (printf  "  %-16s %10s %10s %8s\n" "subsystem" "MB" "entries" "%")
     (println (str "  " (apply str (repeat 48 \-))))
     (doseq [ss order]
       (when-let [entries (groups ss)]
         (let [b (postings/retained (mapv (fn [[_ v]] v) entries))     ; values only
               kb (postings/retained (mapv key entries))]              ; keys only
-          (println (format "  %-16s %10.1f %10s %7.0f%%  (keys %.1f MB, values %.1f MB)"
-                           (name ss) (mb (+ b kb)) (format "%,d" (count entries))
-                           (* 100.0 (/ (double (+ b kb)) total)) (mb kb) (mb b))))))
-    (println (format "  %-16s %10.1f  (whole index map, deduped)" "TOTAL" (mb total)))
+          (printf "  %-16s %10.1f %10s %7.0f%%  (keys %.1f MB, values %.1f MB)\n"
+                  (name ss) (mb (+ b kb)) (format "%,d" (count entries))
+                  (* 100.0 (/ (double (+ b kb)) total)) (mb kb) (mb b)))))
+    (printf "  %-16s %10.1f  (whole index map, deduped)\n" "TOTAL" (mb total))
     total))
 
 ;; ---- main ---------------------------------------------------------------
@@ -148,7 +148,7 @@
 
 (defn- load-into [pairs backend db]
   (let [kb (kb/open-kb {:backend backend :space db :recover? false}
-                         (fn [_] nil) (fn [_] nil))]
+                       (fn [_] nil) (fn [_] nil))]
     (p/clear-records! (:records kb)) (p/clear-index! (:index kb))
     (doseq [[s c] pairs] (try (kb/create-sentex kb s c) (catch Exception _ nil)))
     kb))
@@ -159,7 +159,7 @@
         kb    (load-into pairs :memory 28)
         state @(:state (:backend (:index kb)))
         stored (count (p/sentex-ids (:records kb)))]
-    (println (format "vaelii Phase-2 dense-trie measurement — %,d real facts (uniform sample)" stored))
+    (printf "vaelii Phase-2 dense-trie measurement — %,d real facts (uniform sample)\n" stored)
     ;; Phase 1 + 2 landed: the whole index store retained (trie + roots + term index),
     ;; measured the same way for each backend — :memory (flat map), :memory-dense
     ;; (int-postings values), :memory-columnar (native int-token trie + int-postings).
@@ -169,32 +169,32 @@
           ckb      (load-into pairs :memory-columnar 24)
           col-idx  (postings/retained [(:index ckb)])]
       (println "\n══ Phase 1 + 2 (landed): whole index store, retained heap ══")
-      (println (format "  :memory          %8.1f MB   (flat map of boxed vector keys — the baseline)" (mb mem-idx)))
-      (println (format "  :memory-dense    %8.1f MB   (%.2f× — int-postings on the handle sets)"
-                       (mb den-idx) (/ (double mem-idx) den-idx)))
-      (println (format "  :memory-columnar %8.1f MB   (%.2f× — native int-token trie + int-postings)"
-                       (mb col-idx) (/ (double mem-idx) col-idx)))
+      (printf  "  :memory          %8.1f MB   (flat map of boxed vector keys — the baseline)\n" (mb mem-idx))
+      (printf  "  :memory-dense    %8.1f MB   (%.2f× — int-postings on the handle sets)\n"
+               (mb den-idx) (/ (double mem-idx) den-idx))
+      (printf  "  :memory-columnar %8.1f MB   (%.2f× — native int-token trie + int-postings)\n"
+               (mb col-idx) (/ (double mem-idx) col-idx))
       ;; attribute the columnar RAM into NON-overlapping parts.  The trie and roots share
       ;; one token dictionary, so jol counts it in both; measure it once and subtract, so
       ;; the three parts sum to the whole.
       (let [dict-b  (postings/retained [(:dict (:index ckb))])
             trie-b  (- (postings/retained [(:trie (:index ckb))]) dict-b)
             roots-b (- (postings/retained [(:roots (:index ckb))]) dict-b)]
-        (println (format "    ├─ native trie (nodes + leaf postings)    %8.1f MB   (was 471.5 MB flat: counters+childsets+leaves)"
-                         (mb trie-b)))
-        (println (format "    ├─ int-keyed roots + term index           %8.1f MB   (packed-long keys + int-postings — was ~208 MB boxed)"
-                         (mb roots-b)))
-        (println (format "    └─ shared token dictionary                %8.1f MB   (interns every trie token + root/term term, once)"
-                         (mb dict-b)))
+        (printf "    ├─ native trie (nodes + leaf postings)    %8.1f MB   (was 471.5 MB flat: counters+childsets+leaves)\n"
+                (mb trie-b))
+        (printf "    ├─ int-keyed roots + term index           %8.1f MB   (packed-long keys + int-postings — was ~208 MB boxed)\n"
+                (mb roots-b))
+        (printf "    └─ shared token dictionary                %8.1f MB   (interns every trie token + root/term term, once)\n"
+                (mb dict-b))
         ;; freeze the trie into CSR (the after-bulk-load, before-query move) and re-measure
         (columnar/compact! (:index ckb))
         (let [ctrie (- (postings/retained [(:trie (:index ckb))]) dict-b)
               whole (postings/retained [(:index ckb)])]
           (println "\n══ Phase 2 follow-up: trie CSR-compacted (read-optimized) ══")
-          (println (format "  native trie   %8.1f MB → %.1f MB   (%.1f× — flat CSR int arrays, no per-node objects)"
-                           (mb trie-b) (mb ctrie) (/ (double trie-b) ctrie)))
-          (println (format "  whole index   %8.1f MB → %.1f MB   (%.2f× vs :memory baseline)"
-                           (mb col-idx) (mb whole) (/ (double mem-idx) whole))))))
+          (printf  "  native trie   %8.1f MB → %.1f MB   (%.1f× — flat CSR int arrays, no per-node objects)\n"
+                   (mb trie-b) (mb ctrie) (/ (double trie-b) ctrie))
+          (printf  "  whole index   %8.1f MB → %.1f MB   (%.2f× vs :memory baseline)\n"
+                   (mb col-idx) (mb whole) (/ (double mem-idx) whole)))))
     (decompose state)
     ;; the current trie STRUCTURE (counters + child-label sets + their keys), Phase 2's target
     (let [cur-struct (postings/retained
@@ -210,16 +210,16 @@
           toks         (postings/retained (into [] (remove nil?) (.keySet ^Object2IntOpenHashMap dict)))
           map-new      (max 0 (- dict-b toks))]
       (println "\n══ Phase 2: dense trie structure vs current (structure only — leaves are Phase 1) ══")
-      (println (format "  current  (:c + :s, boxed vector keys, HAMT)     : %8.1f MB" (mb cur-struct)))
-      (println (format "  naive    (fastutil int-map per node)            : %8.1f MB   (%.2f×) — per-node map overhead swamps it"
-                       (mb naive-b) (/ (double cur-struct) naive-b)))
-      (println (format "  CSR      (columnar int arrays, no node objects) : %8.1f MB   (%.1f×)  ← the dense-native target"
-                       (mb csr-b) (/ (double cur-struct) csr-b)))
-      (println (format "           %,d nodes, %,d edges = 4 int arrays" (:nodes csr) (:edges csr)))
-      (println (format "  token dictionary (%,d tokens)                  : %8.1f MB   (tokens %.1f MB relocated from records + map %.1f MB new)"
-                       (.size ^Object2IntOpenHashMap dict) (mb dict-b) (mb toks) (mb map-new)))
-      (println (format "  → Phase 2 (CSR trie + new dict map): %.1f MB → %.1f MB  (%.1f× on the trie structure)"
-                       (mb cur-struct) (+ (mb csr-b) (mb map-new)) (/ (double cur-struct) (+ csr-b map-new))))
+      (printf  "  current  (:c + :s, boxed vector keys, HAMT)     : %8.1f MB\n" (mb cur-struct))
+      (printf  "  naive    (fastutil int-map per node)            : %8.1f MB   (%.2f×) — per-node map overhead swamps it\n"
+               (mb naive-b) (/ (double cur-struct) naive-b))
+      (printf  "  CSR      (columnar int arrays, no node objects) : %8.1f MB   (%.1f×)  ← the dense-native target\n"
+               (mb csr-b) (/ (double cur-struct) csr-b))
+      (printf  "           %,d nodes, %,d edges = 4 int arrays\n" (:nodes csr) (:edges csr))
+      (printf  "  token dictionary (%,d tokens)                  : %8.1f MB   (tokens %.1f MB relocated from records + map %.1f MB new)\n"
+               (.size ^Object2IntOpenHashMap dict) (mb dict-b) (mb toks) (mb map-new))
+      (printf  "  → Phase 2 (CSR trie + new dict map): %.1f MB → %.1f MB  (%.1f× on the trie structure)\n"
+               (mb cur-struct) (+ (mb csr-b) (mb map-new)) (/ (double cur-struct) (+ csr-b map-new)))
       (println "\n  (tokens relocate from record bodies — Phase 4 stores int ids — so they are not net-new;")
       (println "   leaves/root/term postings are Phase 1's int[] target, in bench-postings.)"))
     (shutdown-agents)))

@@ -172,8 +172,8 @@
               used (quot (- (.totalMemory rt) (.freeMemory rt)) (* 1024 1024))]
           ;; the KB is still reachable here, so post-gc used heap is the fixpoint's
           ;; resident footprint — records, index, TMS — not allocation churn
-          (println (format "PYRAMID run=%d ms=%.1f a-count=%d gate=%s heap-used-mb=%d"
-                           i ms a-count pass used))
+          (printf "PYRAMID run=%d ms=%.1f a-count=%d gate=%s heap-used-mb=%d\n"
+                  i ms a-count pass used)
           (identity kb)))
 
       ;; verify <path>: one run, then the handle-free content dump to <path> — diff
@@ -181,20 +181,20 @@
       "verify"
       (let [{:keys [kb pass]} (run-once)]
         (spit reps (content-dump kb))
-        (println (format "PYRAMID verify gate=%s dump=%s" pass reps)))
+        (printf "PYRAMID verify gate=%s dump=%s\n" pass reps))
 
       "profile"
       (let [start (requiring-resolve 'clj-async-profiler.core/start)
             stop  (requiring-resolve 'clj-async-profiler.core/stop)
             warm  (run-once)]
-        (println (format "PYRAMID warmup ms=%.1f gate=%s" (:ms warm) (:pass warm)))
+        (printf "PYRAMID warmup ms=%.1f gate=%s\n" (:ms warm) (:pass warm))
         (let [r (run-once (fn [t]
                             (start {:event :cpu})
                             (let [v (t)]
                               (println "PYRAMID collapsed:"
                                        (str (stop {:generate-flamegraph? false})))
                               v)))]
-          (println (format "PYRAMID profiled ms=%.1f a-count=%d gate=%s"
-                           (:ms r) (:a-count r) (:pass r))))))
+          (printf "PYRAMID profiled ms=%.1f a-count=%d gate=%s\n"
+                  (:ms r) (:a-count r) (:pass r)))))
     (shutdown-agents)
     (System/exit 0)))

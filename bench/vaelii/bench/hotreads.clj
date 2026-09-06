@@ -230,9 +230,9 @@
   (println "\n── excepted-handles ──────────────────────────────────────────────────────────")
   (println "  one believed (except (sentexHandle H)) per decoy, all visible from the reader;")
   (println "  the fact base and the rule are identical across rows, so only E moves.\n")
-  (println (format "  %8s %8s %9s %11s %14s %9s %9s %10s %9s"
-                   "excepts" "hidden" "derived" "load ms" "µs/derivation"
-                   "reads/d" "walks/d" "ns/walk" "share"))
+  (printf  "  %8s %8s %9s %11s %14s %9s %9s %10s %9s\n"
+           "excepts" "hidden" "derived" "load ms" "µs/derivation"
+           "reads/d" "walks/d" "ns/walk" "share")
   (println (str "  " (apply str (repeat 96 \-))))
   ;; a discarded row first, because the first row of an arm is a cold one and the rows
   ;; are meant to be read against each other: without this the E=0 baseline carries the
@@ -241,8 +241,8 @@
   (except-row 100 facts 1)
   (let [rows (mapv #(except-row % facts reps) [0 1 10 100 1000])]
     (doseq [{:keys [excepts hidden derived ms per-drv calls costly read-ns share]} rows]
-      (println (format "  %8d %8d %9d %11.1f %14.1f %9.2f %9.2f %10.0f %8.1f%%"
-                       excepts hidden derived ms per-drv calls costly read-ns share)))
+      (printf "  %8d %8d %9d %11.1f %14.1f %9.2f %9.2f %10.0f %8.1f%%\n"
+              excepts hidden derived ms per-drv calls costly read-ns share))
     (println (str "\n  `share` is the read's fraction of the run it was measured in, and the only\n"
                   "  column that may be read against a total; the µs/derivation beside it comes\n"
                   "  from the uninstrumented run and is the absolute figure."))
@@ -305,9 +305,9 @@
   (println "  one reduce over specs(T) per literal per pick, and `order` picks every")
   (println "  remaining literal on every pick.  tax/specs is memoized on the taxonomy")
   (println "  generation, so the fetch is O(1) and the walk over it is not.\n")
-  (println (format "  %6s %8s %9s %14s %14s %11s %13s %10s"
-                   "depth" "types" "|specs|" "ns/est-matches" "ns/order"
-                   "µs/deriv" "fans/d" "share"))
+  (printf  "  %6s %8s %9s %14s %14s %11s %13s %10s\n"
+           "depth" "types" "|specs|" "ns/est-matches" "ns/order"
+           "µs/deriv" "fans/d" "share")
   (println (str "  " (apply str (repeat 96 \-))))
   (doseq [d (range 2 (inc (long depth)))]
     (let [types  (tree-size d branching)
@@ -336,10 +336,10 @@
                                             facts leaf0 leaves nil))
           per-d  (/ (double ns) (max 1 drv) 1000.0)
           per-c  (/ (double costly) (max 1 drv))]
-      (println (format "  %6d %8d %9d %14.0f %14.0f %11.1f %6.2f/%-6.2f %9.1f%%"
-                       d types specs est-ns ord-ns per-d
-                       per-c (/ (double total) (max 1 drv))
-                       (* 100.0 (/ (double spent) (max 1 elapsed)))))))
+      (printf "  %6d %8d %9d %14.0f %14.0f %11.1f %6.2f/%-6.2f %9.1f%%\n"
+              d types specs est-ns ord-ns per-d
+              per-c (/ (double total) (max 1 drv))
+              (* 100.0 (/ (double spent) (max 1 elapsed))))))
   (println (str "\n  `fans/d` is broad-literal calls per derivation over all est-matches calls.\n"
                 "  A plan's own `memoizing` collects the repeats *within* one plan — the first\n"
                 "  pick fans and the other two hit its cache — so the share is one fan per plan.\n"
@@ -370,8 +370,8 @@
 (defn- path-arm [{:keys [depth branching facts]}]
   (println "\n── which path pays for the fan ───────────────────────────────────────────────")
   (println "  the same rule set, chained forward and asked backward.\n")
-  (println (format "  %-30s %6s %9s %11s %9s %8s"
-                   "path" "depth" "|specs|" "run ms" "fans" "share"))
+  (printf  "  %-30s %6s %9s %11s %9s %8s\n"
+           "path" "depth" "|specs|" "run ms" "fans" "share")
   (println (str "  " (apply str (repeat 78 \-))))
   (doseq [d [(max 2 (- (long depth) 2)) (long depth)]]
     (let [leaves (long (Math/pow branching (dec d)))
@@ -389,9 +389,9 @@
                               (fn [kb] (dotimes [_ 40]
                                          (count (v/prove kb '[(hrOut ?a ?b)] est-ctx)))))]]]
       (doseq [[label {:keys [costly spent elapsed]}] rows]
-        (println (format "  %-30s %6d %9d %11.1f %9d %7.1f%%"
-                         label d specs (/ (double elapsed) 1e6) costly
-                         (* 100.0 (/ (double spent) (max 1 elapsed))))))))
+        (printf "  %-30s %6d %9d %11.1f %9d %7.1f%%\n"
+                label d specs (/ (double elapsed) 1e6) costly
+                (* 100.0 (/ (double spent) (max 1 elapsed)))))))
   (println (str "\n  A memo stamped on the change clock is retired by a placement, so it reaches the\n"
                 "  first line never and the second where there is nothing to take.  Both readings\n"
                 "  are inside one instrumented run, as everywhere else here.")))
@@ -406,7 +406,7 @@
 (defn -main [& args]
   (let [opts (parse-args args)]
     (println "vaelii hot reads — two per-firing costs the growth gate cannot see")
-    (println (format "opts: %s" (pr-str opts)))
+    (printf  "opts: %s\n" (pr-str opts))
     (except-arm opts)
     (est-arm opts)
     (path-arm opts)

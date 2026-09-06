@@ -272,8 +272,8 @@
   per-pair spread is printed for the same reason: a 4% claim off pairs that scatter 20%
   is a claim about the box."
   [n repeats facts]
-  (println (format "%n── the coincidence-post guard, %,d facts × %d ABBA pairs ──" n repeats))
-  (println (format "%-14s %12s %12s %10s" "pair" "guarded ms" "posting ms" "ratio"))
+  (printf "%n── the coincidence-post guard, %,d facts × %d ABBA pairs ──\n" n repeats)
+  (printf "%-14s %12s %12s %10s\n" "pair" "guarded ms" "posting ms" "ratio")
   (let [unguarded {#'kb/note-opposed! always-post-opposed!}
         pairs (mapv (fn [i]
                       (let [a (baseline-run facts {})
@@ -282,41 +282,41 @@
                             d (baseline-run facts {})
                             kept   (/ (+ a d) 2.0)
                             posted (/ (+ b c) 2.0)]
-                        (println (format "%-14d %12.1f %12.1f %9.3f×"
-                                         (inc i) kept posted (/ kept posted)))
+                        (printf "%-14d %12.1f %12.1f %9.3f×\n"
+                                (inc i) kept posted (/ kept posted))
                         [kept posted]))
                     (range repeats))
         kept   (median (map first pairs))
         posted (median (map second pairs))]
-    (println (format "%-14s %12.1f %12.1f %9.3f×   (%.2f vs %.2f µs/fact)"
-                     "median" kept posted (/ kept posted)
-                     (* 1000.0 (/ kept n)) (* 1000.0 (/ posted n))))))
+    (printf "%-14s %12.1f %12.1f %9.3f×   (%.2f vs %.2f µs/fact)\n"
+            "median" kept posted (/ kept posted)
+            (* 1000.0 (/ kept n)) (* 1000.0 (/ posted n)))))
 
 ;; ---- reporting ----------------------------------------------------------
 
 (defn- report-ladder [n mss]
   (let [total (double (first mss))
         us    (fn [ms] (* 1000.0 (/ (double ms) n)))]
-    (println (format "%n── peel ladder, %,d facts ──" n))
-    (println (format "%-52s %10s %9s %8s" "phase" "ms" "µs/fact" "share"))
+    (printf "%n── peel ladder, %,d facts ──\n" n)
+    (printf "%-52s %10s %9s %8s\n" "phase" "ms" "µs/fact" "share")
     (doseq [i (range 1 (count mss))]
       (let [d (- (double (nth mss (dec i))) (double (nth mss i)))]
-        (println (format "%-52s %10.1f %9.2f %7.1f%%"
-                         (nth rung-names i) d (us d) (* 100.0 (/ d total))))))
+        (printf "%-52s %10.1f %9.2f %7.1f%%\n"
+                (nth rung-names i) d (us d) (* 100.0 (/ d total)))))
     (let [resid (double (last mss))]
-      (println (format "%-52s %10.1f %9.2f %7.1f%%"
-                       (last rung-names) resid (us resid) (* 100.0 (/ resid total)))))
-    (println (format "%-52s %10.1f %9.2f %7.1f%%   (%,.0f facts/s)"
-                     "TOTAL" total (us total) 100.0 (/ (double n) (/ total 1000.0))))))
+      (printf "%-52s %10.1f %9.2f %7.1f%%\n"
+              (last rung-names) resid (us resid) (* 100.0 (/ resid total))))
+    (printf "%-52s %10.1f %9.2f %7.1f%%   (%,.0f facts/s)\n"
+            "TOTAL" total (us total) 100.0 (/ (double n) (/ total 1000.0)))))
 
 (defn- report-split [n full no-incr no-batch]
   (let [us (fn [ms] (* 1000.0 (/ (double ms) n)))]
-    (println (format "%n── index write, split (%,d facts) ──" n))
-    (println (format "%-52s %10s %9s" "component" "ms" "µs/fact"))
+    (printf "%n── index write, split (%,d facts) ──\n" n)
+    (printf "%-52s %10s %9s\n" "component" "ms" "µs/fact")
     (doseq [[label ms] [["count maintenance (:increment ops)" (- full no-incr)]
                         ["postings — trie edges, leaves, terms, roots" (- no-incr no-batch)]
                         ["key streams + the rest of rung 5" no-batch]]]
-      (println (format "%-52s %10.1f %9.2f" label (double ms) (us ms))))))
+      (printf "%-52s %10.1f %9.2f\n" label (double ms) (us ms)))))
 
 (defn- verify!
   "The ladder's rungs store less than a real load; this does not.  A plain
@@ -332,8 +332,8 @@
         _ (doseq [f facts] (v/assert b f bench-context {:chain? false}))
         nb (v/count-with-functor b edge-pred)
         _ (drop-kb! b)]
-    (println (format "%nparity with per-fact assert: %s (%,d vs %,d of %,d facts)"
-                     (if (= na nb (count facts)) "OK" "MISMATCH") na nb (count facts)))))
+    (printf "%nparity with per-fact assert: %s (%,d vs %,d of %,d facts)\n"
+            (if (= na nb (count facts)) "OK" "MISMATCH") na nb (count facts))))
 
 (defn -main
   "`[n repeats mode]` — `mode` is `full` (the ladder, the index split and the transient
@@ -343,8 +343,8 @@
         repeats (or (some-> ^String (second args) parse-long) 1)
         mode    (or (nth args 2 nil) "full")
         facts   (corpus n)]
-    (println (format "load-path decomposition — :memory pair — %,d facts, %d repeat(s), %s"
-                     n repeats mode))
+    (printf "load-path decomposition — :memory pair — %,d facts, %d repeat(s), %s\n"
+            n repeats mode)
     (let [warm (fresh-kb)]                       ; so the ladder is not measuring the JIT
       (load! warm (subvec facts 0 (min n 20000)))
       (drop-kb! warm))
@@ -354,7 +354,7 @@
       (shutdown-agents)
       (System/exit 0))
     (dotimes [r repeats]
-      (when (> repeats 1) (println (format "%n=== repeat %d ===" (inc r))))
+      (when (> repeats 1) (printf "%n=== repeat %d ===\n" (inc r)))
       (report-ladder n (one-ladder facts))
       (let [full     (split-run facts identity)
             no-incr  (split-run facts drop-increments)
@@ -362,6 +362,6 @@
         (report-split n full no-incr no-batch))
       (println "\n── the transient-accumulation arm ──")
       (let [b (bulk-writes-run facts)]
-        (println (format "with-bulk-writes baseline: %.1f ms (%,.0f facts/s)"
-                         b (/ (double n) (/ b 1000.0))))))
+        (printf "with-bulk-writes baseline: %.1f ms (%,.0f facts/s)\n"
+                b (/ (double n) (/ b 1000.0)))))
     (shutdown-agents)))

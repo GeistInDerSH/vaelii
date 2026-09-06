@@ -97,24 +97,24 @@
 (defn- report-audit [tally elapsed]
   (let [{:keys [facts rules metas bad fact-preds rule-preds dirs defeasible ante-counts conseq]} tally
         rule-only (clojure.set/difference rule-preds fact-preds)]
-    (println (format "\n══ rule audit ══ (%.1fs)  facts %,d | rules %,d | exceptWhen-metas %,d | unthawable %,d"
-                     (/ elapsed 1000.0) facts rules metas bad))
-    (println (format "  distinct fact predicates : %,d" (count fact-preds)))
-    (println (format "  distinct rule predicates : %,d  (in antecedents/consequents)" (count rule-preds)))
-    (println (format "  rule directions          : %s" (pr-str dirs)))
-    (println (format "  defeasible rules         : %,d" (or defeasible 0)))
-    (println (format "  RULE-ONLY predicates (in rules, never in a fact) : %,d" (count rule-only)))
+    (printf "\n══ rule audit ══ (%.1fs)  facts %,d | rules %,d | exceptWhen-metas %,d | unthawable %,d\n"
+            (/ elapsed 1000.0) facts rules metas bad)
+    (printf "  distinct fact predicates : %,d\n" (count fact-preds))
+    (printf "  distinct rule predicates : %,d  (in antecedents/consequents)\n" (count rule-preds))
+    (printf "  rule directions          : %s\n" (pr-str dirs))
+    (printf "  defeasible rules         : %,d\n" (or defeasible 0))
+    (printf "  RULE-ONLY predicates (in rules, never in a fact) : %,d\n" (count rule-only))
     (when (seq ante-counts)
       (println "  antecedent-count histogram (backward join/branching cost):")
       (doseq [[k c] (sort ante-counts)]
-        (println (format "    %d antecedent(s): %,d rules  (%.0f%%)" k c (* 100.0 (/ c (double (max 1 rules))))))))
+        (printf "    %d antecedent(s): %,d rules  (%.0f%%)\n" k c (* 100.0 (/ c (double (max 1 rules)))))))
     (when (seq conseq)
-      (println (format "  consequent-predicate skew: %,d distinct consequents; top (= candidate-set size for a goal on it):"
-                       (count conseq)))
+      (printf "  consequent-predicate skew: %,d distinct consequents; top (= candidate-set size for a goal on it):\n"
+              (count conseq))
       (doseq [[p c] (take 10 (sort-by val > conseq))]
-        (println (format "    %-28s %,d rules conclude it" p c))))
+        (printf "    %-28s %,d rules conclude it\n" p c)))
     (when (seq rule-only)
-      (println (format "  sample of the %,d RULE-ONLY predicates:" (count rule-only)))
+      (printf  "  sample of the %,d RULE-ONLY predicates:\n" (count rule-only))
       (println "    " (pr-str (vec (sort (take 40 rule-only))))))
     tally))
 
@@ -133,7 +133,7 @@
     (let [len (.length raf) t0 (System/nanoTime)]
       (loop [off 0, n 0, tally empty-tally]
         (when (and (pos? n) (zero? (mod n 1000000)))
-          (println (format "  … %,d records (%.0f%%)" n (* 100.0 (/ (double off) len)))))
+          (printf "  … %,d records (%.0f%%)\n" n (* 100.0 (/ (double off) len))))
         (if (>= off len)
           (report-audit tally (/ (- (System/nanoTime) t0) 1e6))
           (do (.seek raf off)
@@ -180,7 +180,7 @@
     (let [total (quot (.length idx) 24)
           step  (max 1 (quot total want))
           t0    (System/nanoTime)]
-      (println (format "  idx holds %,d slots; sampling every %,dth handle" total step))
+      (printf "  idx holds %,d slots; sampling every %,dth handle\n" total step)
       (loop [id 0, tally empty-tally]
         (if (>= id total)
           (report-audit tally (/ (- (System/nanoTime) t0) 1e6))
@@ -280,44 +280,44 @@
   (let [n     (count syms)
         occ   (reduce + (vals syms))
         chars (->> syms keys (map odd-chars) frequencies (sort-by val >))]
-    (println (format "\n  ── %s ── %,d distinct spellings over %,d occurrences"
-                     (clojure.core/name class) n occ))
+    (printf  "\n  ── %s ── %,d distinct spellings over %,d occurrences\n"
+             (clojure.core/name class) n occ)
     (println "     characters a convention would have to admit (distinct spellings):")
     (doseq [[cs c] (take 8 chars)]
-      (println (format "       %-10s %,7d  (%.1f%%)"
-                       (if (str/blank? cs) "<none: shape>" (pr-str cs)) c
-                       (* 100.0 (/ c (double (max 1 n)))))))
+      (printf "       %-10s %,7d  (%.1f%%)\n"
+              (if (str/blank? cs) "<none: shape>" (pr-str cs)) c
+              (* 100.0 (/ c (double (max 1 n))))))
     (println "     most frequent offending spellings:")
     (doseq [[s c] (take 12 (sort-by val > syms))]
-      (println (format "       %-42s %,d" s c)))))
+      (printf "       %-42s %,d\n" s c))))
 
 (defn- report-naming [tally elapsed]
   (let [{:keys [records bad offending problems rescued
                 by-class by-class-role records-by-class spellings]} tally
         pct #(* 100.0 (/ (double %1) (double (max 1 %2))))]
-    (println (format "\n══ naming audit ══ (%.1fs)  records %,d | unthawable %,d"
-                     (/ elapsed 1000.0) records bad))
-    (println (format "  records the public entry point would REFUSE : %,d  (%.2f%% of %,d)"
-                     offending (pct offending records) records))
-    (println (format "  violations in them                 : %,d" problems))
+    (printf  "\n══ naming audit ══ (%.1fs)  records %,d | unthawable %,d\n"
+             (/ elapsed 1000.0) records bad)
+    (printf  "  records the public entry point would REFUSE : %,d  (%.2f%% of %,d)\n"
+             offending (pct offending records) records)
+    (printf  "  violations in them                 : %,d\n" problems)
     (println "\n  by class:")
-    (println (format "    %-16s %12s %12s %12s" "class" "violations" "records" "spellings"))
+    (printf  "    %-16s %12s %12s %12s\n" "class" "violations" "records" "spellings")
     (doseq [[c n] (sort-by val > by-class)]
-      (println (format "    %-16s %12s %12s %12s"
-                       (clojure.core/name c) (format "%,d" n)
-                       (format "%,d" (get records-by-class c 0))
-                       (format "%,d" (count (get spellings c))))))
+      (printf  "    %-16s %12s %12s %12s\n"
+               (clojure.core/name c) (format "%,d" n)
+               (format "%,d" (get records-by-class c 0))
+               (format "%,d" (count (get spellings c)))))
     (println "\n  by class × the frame the literal sits in:")
     (doseq [[[c r] n] (sort-by val > by-class-role)]
-      (println (format "    %-16s %-12s %,12d" (clojure.core/name c) (clojure.core/name r) n)))
+      (printf "    %-16s %-12s %,12d\n" (clojure.core/name c) (clojure.core/name r) n))
     (doseq [[c syms] (sort-by (comp - count val) spellings)]
       (report-spellings c syms))
     (println "\n  ── what each widening would buy, cheapest change first ──")
-    (println (format "    %-52s %13s %13s %13s" "" "violations" "records" "still refused"))
+    (printf  "    %-52s %13s %13s %13s\n" "" "violations" "records" "still refused")
     (doseq [{cname :name} candidates
             :let [{rp :problems rr :records} (get rescued cname)]]
-      (println (format "    %-52s %12.2f%% %12.2f%% %,13d"
-                       cname (pct rp problems) (pct rr offending) (- offending rr))))
+      (printf "    %-52s %12.2f%% %12.2f%% %,13d\n"
+              cname (pct rp problems) (pct rr offending) (- offending rr)))
     tally))
 
 (defn- naming-audit [^String log-path]
@@ -325,7 +325,7 @@
     (let [len (.length raf) t0 (System/nanoTime)]
       (loop [off 0, n 0, tally empty-naming-tally]
         (when (and (pos? n) (zero? (mod n 1000000)))
-          (println (format "  … %,d records (%.0f%%)" n (* 100.0 (/ (double off) len)))))
+          (printf "  … %,d records (%.0f%%)\n" n (* 100.0 (/ (double off) len))))
         (if (>= off len)
           (report-naming tally (/ (- (System/nanoTime) t0) 1e6))
           (do (.seek raf off)
@@ -347,20 +347,20 @@
         args   (mapcat rest lists)
         inds   (frequencies (filter symbol? args))
         ctxs   (frequencies (map second pairs))]
-    (println (format "\n══ real-corpus shape — %,d sampled facts ══" (count pairs)))
-    (println (format "  distinct predicates %,d | distinct individuals(arg syms) %,d | distinct contexts %,d"
-                     (count preds) (count inds) (count ctxs)))
+    (printf  "\n══ real-corpus shape — %,d sampled facts ══\n" (count pairs))
+    (printf  "  distinct predicates %,d | distinct individuals(arg syms) %,d | distinct contexts %,d\n"
+             (count preds) (count inds) (count ctxs))
     (println "  arity histogram (args per fact):")
     (doseq [[a c] (sort (seq arity))]
-      (println (format "    arity %d: %,d  (%.0f%%)" a c (* 100.0 (/ c (double (count lists)))))))
-    (println (format "  compound nesting: flat %,d | 1-deep %,d | 2+-deep %,d"
-                     (get depths 0 0) (get depths 1 0) (reduce + (vals (filter (fn [[d _]] (>= d 2)) depths)))))
+      (printf "    arity %d: %,d  (%.0f%%)\n" a c (* 100.0 (/ c (double (count lists))))))
+    (printf  "  compound nesting: flat %,d | 1-deep %,d | 2+-deep %,d\n"
+             (get depths 0 0) (get depths 1 0) (reduce + (vals (filter (fn [[d _]] (>= d 2)) depths))))
     (println "  top predicates by frequency (the big-posting tail):")
     (doseq [[pr c] (take 8 (sort-by val > preds))]
-      (println (format "    %-24s %,d" pr c)))
+      (printf "    %-24s %,d\n" pr c))
     (println "  Zipf check — top individual frequencies:")
     (doseq [[in c] (take 5 (sort-by val > inds))]
-      (println (format "    %-24s %,d" in c)))))
+      (printf "    %-24s %,d\n" in c))))
 
 (def default-dir
   "The store the real-corpus benchmarks read, when the command line names none:
@@ -399,18 +399,18 @@
 (defn- density-survey [args uniform?]
   (let [n    (or (some-> (first args) Long/parseLong) 300000)
         path (str default-dir "/records/sentexes.log")]
-    (println (format "vaelii real-corpus %s survey — %,d facts (READ-ONLY)"
-                     (if uniform? "UNIFORM" "front-of-log") n))
+    (printf "vaelii real-corpus %s survey — %,d facts (READ-ONLY)\n"
+            (if uniform? "UNIFORM" "front-of-log") n)
     (when-not (.exists (java.io.File. ^String path))
       (println "  store not found.") (System/exit 1))
     (let [pairs (if uniform? (uniform-pairs default-dir n) (stream-sentences path n))]
-      (println (format "  sampled %,d sentences (%,d usable)" n (count pairs)))
+      (printf "  sampled %,d sentences (%,d usable)\n" n (count pairs))
       (shape pairs)
       (let [kb (kb/open-kb {:backend :memory :space 26 :recover? false}
                            (fn [_] nil) (fn [_] nil))]
         (p/clear-records! (:records kb)) (p/clear-index! (:index kb))
         (doseq [[s c] pairs] (try (kb/create-sentex kb s c) (catch Exception _ nil)))
-        (println (format "  re-indexed %,d sentexes into a fresh :memory KB" (count (p/sentex-ids (:records kb)))))
+        (printf "  re-indexed %,d sentexes into a fresh :memory KB\n" (count (p/sentex-ids (:records kb))))
         (postings/survey-index kb))
       (shutdown-agents))))
 
@@ -420,18 +420,18 @@
   ;; sampling survey.
   (cond
     (= "audit" (first args))
-    (do (println (format "vaelii RULE AUDIT — full scan of %s/records/sentexes.log (READ-ONLY)" default-dir))
+    (do (printf "vaelii RULE AUDIT — full scan of %s/records/sentexes.log (READ-ONLY)\n" default-dir)
         (full-scan (str (or (second args) default-dir) "/records/sentexes.log"))
         (shutdown-agents))
 
     (= "naming" (first args))
-    (do (println (format "vaelii NAMING AUDIT — full scan of %s/records/sentexes.log (READ-ONLY)"
-                         (or (second args) default-dir)))
+    (do (printf "vaelii NAMING AUDIT — full scan of %s/records/sentexes.log (READ-ONLY)\n"
+                (or (second args) default-dir))
         (naming-audit (str (or (second args) default-dir) "/records/sentexes.log"))
         (shutdown-agents))
 
     (= "sample" (first args))
-    (do (println (format "vaelii RULE AUDIT — uniform handle sample of %s (READ-ONLY)" default-dir))
+    (do (printf "vaelii RULE AUDIT — uniform handle sample of %s (READ-ONLY)\n" default-dir)
         (uniform-sample (or (nth args 2 nil) default-dir)
                         (or (some-> (second args) Long/parseLong) 200000))
         (shutdown-agents))

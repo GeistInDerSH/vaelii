@@ -135,49 +135,49 @@
         roster    (long (p/term-count ix))
         forms     (reduce + 0 (map long (mapcat vals (vals nesting))))
         floor0    (exact-floor-0 kb ids 200000)]
-    (println (format "  %,d sentexes — %,d facts (%,d negative), %,d rules — read in %.0f ms"
-                     total facts negatives rules (ms t0)))
-    (println (format "  %,d distinct fact predicates | %,d distinct argument symbols | %,d contexts"
-                     (count preds) (count args) (count contexts)))
+    (printf "  %,d sentexes — %,d facts (%,d negative), %,d rules — read in %.0f ms\n"
+            total facts negatives rules (ms t0))
+    (printf "  %,d distinct fact predicates | %,d distinct argument symbols | %,d contexts\n"
+            (count preds) (count args) (count contexts))
 
     (println "\n  arity of a fact:")
     (doseq [[a n] (sort arity)]
-      (println (format "    %d argument(s) %,10d  (%5.1f%%)" a n (pct n facts))))
+      (printf "    %d argument(s) %,10d  (%5.1f%%)\n" a n (pct n facts)))
 
     (println "\n  where the nesting is — the structural trie linearizes a positive fact's")
     (println "  arguments and nothing else, so only the first row is reachable by it:")
-    (println (format "    %-12s %10s %10s %10s %10s   %s" "literal in" "flat" "1 deep" "2 deep" "3+ deep" "nested"))
+    (printf  "    %-12s %10s %10s %10s %10s   %s\n" "literal in" "flat" "1 deep" "2 deep" "3+ deep" "nested")
     (doseq [where [:fact :negative :rule]
             :let [row (get nesting where {})
                   tot (reduce + 0 (vals row))]
             :when (pos? (long tot))]
-      (println (format "    %-12s %,10d %,10d %,10d %,10d   %,d  (%.2f%%)"
-                       (name where) (get row 0 0) (get row 1 0) (get row 2 0) (get row 3 0)
-                       (get nested where 0) (pct (get nested where 0) tot))))
+      (printf "    %-12s %,10d %,10d %,10d %,10d   %,d  (%.2f%%)\n"
+              (name where) (get row 0 0) (get row 1 0) (get row 2 0) (get row 3 0)
+              (get nested where 0) (pct (get nested where 0) tot)))
     (let [reach (get nested :fact 0)
           miss  (+ (long (get nested :negative 0)) (long (get nested :rule 0)))]
-      (println (format "    → the structural index reaches %,d of the %,d nested literals (%.1f%%)"
-                       reach (+ (long reach) miss) (pct reach (+ (long reach) miss)))))
+      (printf "    → the structural index reaches %,d of the %,d nested literals (%.1f%%)\n"
+              reach (+ (long reach) miss) (pct reach (+ (long reach) miss))))
 
     (println "\n  the token dictionary — is it bound by the vocabulary or by the corpus?")
-    (println (format "    term-index keys                 %,10d" term-keys))
-    (println (format "    of them symbols (the roster)    %,10d  (%.1f%%)" roster (pct roster term-keys)))
-    (println (format "    so compound keys                %,10d  (%.1f%%)"
-                     (- term-keys roster) (pct (- term-keys roster) term-keys)))
-    (println (format "    keys per sentex                 %14.2f" (/ (double term-keys) (max 1 total))))
+    (printf  "    term-index keys                 %,10d\n" term-keys)
+    (printf  "    of them symbols (the roster)    %,10d  (%.1f%%)\n" roster (pct roster term-keys))
+    (printf  "    so compound keys                %,10d  (%.1f%%)\n"
+             (- term-keys roster) (pct (- term-keys roster) term-keys))
+    (printf  "    keys per sentex                 %14.2f\n" (/ (double term-keys) (max 1 total)))
     (if floor0
-      (println (format "    at *min-indexed-depth* 0        %,10d  (%.2f× the default, %.2f keys/sentex)"
-                       floor0 (/ (double floor0) (max 1 term-keys)) (/ (double floor0) (max 1 total))))
-      (println (format "    at *min-indexed-depth* 0        ≤ %,8d  (one more key per content literal at most; %,d literals)"
-                       (+ term-keys forms) forms)))
+      (printf "    at *min-indexed-depth* 0        %,10d  (%.2f× the default, %.2f keys/sentex)\n"
+              floor0 (/ (double floor0) (max 1 term-keys)) (/ (double floor0) (max 1 total)))
+      (printf "    at *min-indexed-depth* 0        ≤ %,8d  (one more key per content literal at most; %,d literals)\n"
+              (+ term-keys forms) forms))
 
     (println "\n  the leading-variable fan, per predicate: `count-children [pred]` is how many")
     (println "  distinct first arguments a `(pred ?x B)` trie walk would expand at level 1.")
-    (println (format "    %-34s %12s %12s %10s" "predicate" "extent" "fan at arg1" "extent/fan"))
+    (printf  "    %-34s %12s %12s %10s\n" "predicate" "extent" "fan at arg1" "extent/fan")
     (doseq [pd (take 15 (sort-by #(- (long (p/count-with-functor ix %))) (vec preds)))
             :let [ext (long (p/count-with-functor ix pd))
                   fan (long (p/count-children ix [pd]))]]
-      (println (format "    %-34s %,12d %,12d %10.2f" pd ext fan (/ (double ext) (max 1 fan)))))
+      (printf "    %-34s %,12d %,12d %10.2f\n" pd ext fan (/ (double ext) (max 1 fan))))
     t))
 
 ;; ---- reading the runtime tallies ----------------------------------------
@@ -225,40 +225,40 @@
   printed as one line each."
   [rows]
   (doseq [[[f tr ad pth] n] rows]
-    (println (format "      %-30s %-6s %-10s %-15s %,8d"
-                     f (name tr) (if (= "" ad) "-" ad) (name pth) n))))
+    (printf "      %-30s %-6s %-10s %-15s %,8d\n"
+            f (name tr) (if (= "" ad) "-" ad) (name pth) n)))
 
 (defn- goal-report [snap label]
   (let [goals (:goals snap)
         total (reduce + 0 (vals goals))
         by    (fn [f] (sort-by val > (reduce (fn [m [k n]] (update m (f k) (fnil + 0) n)) {} goals)))]
-    (println (format "\n  %s — %,d retrieval decisions (candidate-handles + matches-hierarchical)"
-                     label total))
+    (printf "\n  %s — %,d retrieval decisions (candidate-handles + matches-hierarchical)\n"
+            label total)
     (when (pos? total)
       (println "    by access path:")
       (doseq [[pth n] (by #(nth % 3))]
-        (println (format "      %-16s %,10d  (%5.1f%%)" (name pth) n (pct n total))))
+        (printf "      %-16s %,10d  (%5.1f%%)\n" (name pth) n (pct n total)))
       (println "    by binding pattern (b ground atom · B ground compound · n unkeyed literal · f open · F open compound):")
       (doseq [[ad n] (take 12 (by #(nth % 2)))]
-        (println (format "      %-16s %,10d  (%5.1f%%)" (if (= "" ad) "<no arguments>" ad) n (pct n total))))
+        (printf "      %-16s %,10d  (%5.1f%%)\n" (if (= "" ad) "<no arguments>" ad) n (pct n total)))
       (let [open  (reduce + 0 (map val (filter (fn [[k _]] (= :open (nth k 0))) goals)))
             stuck (reduce + 0 (map val (filter (fn [[k _]] (stuck-adornment? (nth k 2))) goals)))
             deep  (reduce + 0 (map val (filter (fn [[k _]] (deep-after-open? (nth k 2))) goals)))
             anyc  (reduce + 0 (map val (filter (fn [[k _]] (open-compound? (nth k 2))) goals)))]
         ;; the two shapes the secondary roots exist for, as fractions of the whole
-        (println (format "    a bound argument after an open one (what the argument roots are for)  %,d  (%.2f%%)"
-                         stuck (pct stuck total)))
-        (println (format "    an open functor `(?p …)` (what the argument-slot roster is for)       %,d  (%.2f%%)"
-                         open (pct open total)))
+        (printf "    a bound argument after an open one (what the argument roots are for)  %,d  (%.2f%%)\n"
+                stuck (pct stuck total))
+        (printf "    an open functor `(?p …)` (what the argument-slot roster is for)       %,d  (%.2f%%)\n"
+                open (pct open total))
         ;; and the shape nothing is for — the one a path-keyed root would be built for
-        (println (format "    an open compound after an open one (what nothing is for)              %,d  (%.2f%%)"
-                         deep (pct deep total)))
+        (printf "    an open compound after an open one (what nothing is for)              %,d  (%.2f%%)\n"
+                deep (pct deep total))
         ;; the same shape with the position rule dropped, which separates "never blocked"
         ;; from "never asked" when the line above is zero
-        (println (format "    an open compound at any position (whether the shape arrives at all)   %,d  (%.2f%%)"
-                         anyc (pct anyc total)))
-        (println (format "    distinct shapes asked                                                 %,d"
-                         (count goals))))
+        (printf "    an open compound at any position (whether the shape arrives at all)   %,d  (%.2f%%)\n"
+                anyc (pct anyc total))
+        (printf "    distinct shapes asked                                                 %,d\n"
+                (count goals)))
       (println "    the ten most-asked shapes:")
       (shape-rows (take 10 (sort-by val > goals)))
       ;; the same cut over the shape with no access path, because "is there a corpus that
@@ -290,61 +290,61 @@
 (defn- read-report [snap label]
   (let [rs    (:reads snap)
         total (reduce + 0 (vals rs))]
-    (println (format "\n  %s — %,d index reads, by family" label total))
+    (printf "\n  %s — %,d index reads, by family\n" label total)
     (doseq [f families
             :let [n (long (get rs f 0))]]
-      (println (format "      %-18s %,10d  %s" (name f) n
-                       (if (zero? n) "— never read" (format "(%5.1f%%)" (pct n total))))))))
+      (printf "      %-18s %,10d  %s\n" (name f) n
+              (if (zero? n) "— never read" (format "(%5.1f%%)" (pct n total)))))))
 
 (defn- fan-report [snap label]
   (let [fan   (:fan snap)
         calls (reduce + 0 (map (comp long :calls val) fan))
         visits (reduce + 0 (map (comp long #(or (:visits %) 0) val) fan))
         decades (apply merge-with + (map (comp :decades val) fan))]
-    (println (format "\n  %s — %,d trie walks, %,d node probes (%.2f per walk)"
-                     label calls visits (/ (double visits) (max 1 calls))))
+    (printf "\n  %s — %,d trie walks, %,d node probes (%.2f per walk)\n"
+            label calls visits (/ (double visits) (max 1 calls)))
     (when (seq decades)
       (println "    probes per walk:")
       (doseq [[d n] (sort decades)]
-        (println (format "      %,8d …  %,10d walks  (%5.1f%%)" d n (pct n calls)))))
+        (printf "      %,8d …  %,10d walks  (%5.1f%%)\n" d n (pct n calls))))
     (when (seq fan)
       (println "    the walks that cost the most, by total probes:")
-      (println (format "      %-30s %10s %12s %10s %10s" "first token" "walks" "probes" "per walk" "widest"))
+      (printf  "      %-30s %10s %12s %10s %10s\n" "first token" "walks" "probes" "per walk" "widest")
       (doseq [[tok row] (take 10 (sort-by (comp - long :visits val) fan))]
-        (println (format "      %-30s %,10d %,12d %10.1f %,10d"
-                         tok (:calls row) (:visits row)
-                         (/ (double (:visits row)) (max 1 (long (:calls row))))
-                         (:widest row)))))))
+        (printf "      %-30s %,10d %,12d %10.1f %,10d\n"
+                tok (:calls row) (:visits row)
+                (/ (double (:visits row)) (max 1 (long (:calls row))))
+                (:widest row))))))
 
 (defn- write-report [snap label]
   (let [w   (:writes snap)
         tot (fn [k] (reduce + 0 (map (comp long #(or (get % k) 0) val) w)))
         n   (tot :asserts)]
-    (println (format "\n  %s — %,d index writes" label n))
+    (printf "\n  %s — %,d index writes\n" label n)
     (when (pos? n)
       (let [levels (tot :levels) terms (tot :terms) roots (tot :roots)
             roster (tot :roster) slots (tot :slots)
             ops    (+ (* 2 levels) terms roots roster slots n)]  ; two ops per trie level, plus the seal
         (println "    keys touched per assert, by family:")
-        (println (format "      trie levels        %8.2f   (two ops each: a counter and a child edge)" (/ (double levels) n)))
-        (println (format "      term index         %8.2f" (/ (double terms) n)))
-        (println (format "      secondary roots    %8.2f   (context + functor + one per indexable argument)" (/ (double roots) n)))
-        (println (format "      term roster        %8.2f   (a name's first mention only)" (/ (double roster) n)))
-        (println (format "      argument slots     %8.2f   (a predicate's first fact at that slot only)" (/ (double slots) n)))
-        (println (format "      → batch ops        %8.2f" (/ (double ops) n))))
+        (printf  "      trie levels        %8.2f   (two ops each: a counter and a child edge)\n" (/ (double levels) n))
+        (printf  "      term index         %8.2f\n" (/ (double terms) n))
+        (printf  "      secondary roots    %8.2f   (context + functor + one per indexable argument)\n" (/ (double roots) n))
+        (printf  "      term roster        %8.2f   (a name's first mention only)\n" (/ (double roster) n))
+        (printf  "      argument slots     %8.2f   (a predicate's first fact at that slot only)\n" (/ (double slots) n))
+        (printf  "      → batch ops        %8.2f\n" (/ (double ops) n)))
       (println "    the predicates that cost the most to write:")
-      (println (format "      %-30s %10s %10s %10s %10s" "functor" "asserts" "levels" "terms" "roots"))
+      (printf  "      %-30s %10s %10s %10s %10s\n" "functor" "asserts" "levels" "terms" "roots")
       (doseq [[f row] (take 8 (sort-by (fn [[_ r]] (- (long (:asserts r)))) w))]
         (let [a (long (:asserts row))]
-          (println (format "      %-30s %,10d %10.2f %10.2f %10.2f"
-                           f a (/ (double (:levels row)) a) (/ (double (:terms row)) a)
-                           (/ (double (:roots row)) a))))))))
+          (printf "      %-30s %,10d %10.2f %10.2f %10.2f\n"
+                  f a (/ (double (:levels row)) a) (/ (double (:terms row)) a)
+                  (/ (double (:roots row)) a)))))))
 
 (defn- retract-report [snap label]
   (let [w   (:retracts snap)
         tot (fn [k] (reduce + 0 (map (comp long #(or (get % k) 0) val) w)))
         n   (tot :retracts)]
-    (println (format "\n  %s — %,d index retractions" label n))
+    (printf "\n  %s — %,d index retractions\n" label n)
     (when (pos? n)
       (let [levels (tot :levels) terms (tot :terms) roots (tot :roots)
             roster (tot :roster) slots (tot :slots) dead (tot :dead)
@@ -354,24 +354,24 @@
             ;; has no parent to detach from, so a retraction that killed it is one under
             ops    (+ 1 levels (* 4 dead) terms roots roster slots n)]
         (println "    ops touched per retraction, by family:")
-        (println (format "      trie levels        %8.2f   (a leaf removal, then one decrement each)" (/ (double levels) n)))
-        (println (format "      dead trie nodes    %8.2f   (three deletes and a parent detach each)" (/ (double dead) n)))
-        (println (format "      term index         %8.2f" (/ (double terms) n)))
-        (println (format "      secondary roots    %8.2f" (/ (double roots) n)))
-        (println (format "      term roster        %8.2f   (a name's last mention only)" (/ (double roster) n)))
-        (println (format "      argument slots     %8.2f   (a predicate's last fact at that slot only)" (/ (double slots) n)))
-        (println (format "      → batch ops       ≤%8.2f" (/ (double ops) n)))
+        (printf  "      trie levels        %8.2f   (a leaf removal, then one decrement each)\n" (/ (double levels) n))
+        (printf  "      dead trie nodes    %8.2f   (three deletes and a parent detach each)\n" (/ (double dead) n))
+        (printf  "      term index         %8.2f\n" (/ (double terms) n))
+        (printf  "      secondary roots    %8.2f\n" (/ (double roots) n))
+        (printf  "      term roster        %8.2f   (a name's last mention only)\n" (/ (double roster) n))
+        (printf  "      argument slots     %8.2f   (a predicate's last fact at that slot only)\n" (/ (double slots) n))
+        (printf  "      → batch ops       ≤%8.2f\n" (/ (double ops) n))
         ;; the quantity a corpus moves without changing what it holds, and the reason
         ;; this is not the assert tally with a sign on it
-        (println (format "    %.2f of every %.2f trie levels died, so the retraction cost is"
-                         (/ (double dead) n) (/ (double levels) n)))
+        (printf  "    %.2f of every %.2f trie levels died, so the retraction cost is\n"
+                 (/ (double dead) n) (/ (double levels) n))
         (println "    a property of how much prefix the corpus shares, not of the sentex"))
       (println "    the predicates that cost the most to retract:")
-      (println (format "      %-30s %10s %10s %10s" "functor" "retracts" "levels" "dead"))
+      (printf  "      %-30s %10s %10s %10s\n" "functor" "retracts" "levels" "dead")
       (doseq [[f row] (take 8 (sort-by (fn [[_ r]] (- (long (:retracts r)))) w))]
         (let [a (long (:retracts row))]
-          (println (format "      %-30s %,10d %10.2f %10.2f"
-                           f a (/ (double (:levels row)) a) (/ (double (:dead row)) a))))))))
+          (printf "      %-30s %,10d %10.2f %10.2f\n"
+                  f a (/ (double (:levels row)) a) (/ (double (:dead row)) a)))))))
 
 ;; ---- the balanced probe --------------------------------------------------
 ;; Every binding pattern asked equally often, which no workload does.  Its question is
@@ -426,10 +426,10 @@
         calls (reduce + 0 (map (comp long :calls val) fan))
         vis   (reduce + 0 (map (comp long #(or (:visits %) 0) val) fan))
         wide  (reduce max 0 (map (comp long #(or (:widest %) 0) val) fan))]
-    (println (format "    %-6d %-8s %,8d  %-34s %,9d %11.1f %,9d"
-                     ar label asks
-                     (->> paths (map (fn [[p n]] (str (name p) " " n))) (interpose ", ") (apply str))
-                     calls (/ (double vis) (max 1 asks)) wide))))
+    (printf "    %-6d %-8s %,8d  %-34s %,9d %11.1f %,9d\n"
+            ar label asks
+            (->> paths (map (fn [[p n]] (str (name p) " " n))) (interpose ", ") (apply str))
+            calls (/ (double vis) (max 1 asks)) wide)))
 
 (defn balanced-probe
   "For each binding pattern, ask it of `k` sample facts on each of the top `preds`
@@ -440,8 +440,8 @@
   (println "  the load, chain and ask arms can be read for which shapes actually arrive.")
   (let [by-arity (group-by #(long (dec (count %)))
                            (mapcat #(sample-facts kb % k) preds))]
-    (println (format "    %-6s %-8s %8s  %-34s %9s %11s %9s"
-                     "arity" "pattern" "asks" "path" "walks" "probes/ask" "widest"))
+    (printf "    %-6s %-8s %8s  %-34s %9s %11s %9s\n"
+            "arity" "pattern" "asks" "path" "walks" "probes/ask" "widest")
     (doseq [[ar facts] (sort by-arity)
             :when (<= 1 ar 3)
             ad (adornments ar)
@@ -460,7 +460,7 @@
   (banner "loading the shipped starter ontology")
   (let [t0 (System/nanoTime)]
     (starter/load-into kb)
-    (println (format "  %,d sentexes in %.0f ms" (v/sentex-count kb) (ms t0)))))
+    (printf "  %,d sentexes in %.0f ms\n" (v/sentex-count kb) (ms t0))))
 
 (defn- load-generated!
   "A corpus with the measured shape of a real one — Zipf-skewed predicates and
@@ -517,20 +517,20 @@
         (try (v/assert kb (list (nth (band 0) (u/zipf-sample bcum rng)) (ind) (ind))
                        'CxBench)
              (catch Exception _ nil))))
-    (println (format "  %,d sentexes in %.0f ms" (v/sentex-count kb) (ms t0)))))
+    (printf "  %,d sentexes in %.0f ms\n" (v/sentex-count kb) (ms t0))))
 
 (defn- load-corpus! [kb dir profile]
   (banner (str "loading " dir " at :" (name profile)))
   (let [reader (foreign/reader! :cyc-corpus)
         t0     (System/nanoTime)
         r      ((:load-dir! reader) kb dir
-                {:profile profile
-                 :on-progress (fn [{:keys [done note]}]
-                                (when (zero? (mod (long done) 200000))
-                                  (println (format "    %,10d sentences … %s" done (or note "")))
-                                  (flush)))})]
-    (println (format "  asserted %,d, refused %,d over %,d contexts in %.0f s"
-                     (:asserted r) (:refused r) (:contexts r) (/ (ms t0) 1000)))
+                                    {:profile profile
+                                     :on-progress (fn [{:keys [done note]}]
+                                                    (when (zero? (mod (long done) 200000))
+                                                      (printf "    %,10d sentences … %s\n" done (or note ""))
+                                                      (flush)))})]
+    (printf "  asserted %,d, refused %,d over %,d contexts in %.0f s\n"
+            (:asserted r) (:refused r) (:contexts r) (/ (ms t0) 1000))
     r))
 
 (defn- rule-goals
@@ -561,8 +561,8 @@
       (try (v/prove-within kb g '?ctx {:max-ms 200 :max-results 20 :max-depth 2})
            (catch Exception _ nil)))
     (let [snap (prof/stop)]
-      (println (format "  proved %,d of %,d rule consequents in %.0f ms"
-                       @asked (count gs) (ms t0)))
+      (printf "  proved %,d of %,d rule consequents in %.0f ms\n"
+              @asked (count gs) (ms t0))
       (goal-report snap "ask")
       (read-report snap "ask")
       (fan-report snap "ask")
@@ -574,7 +574,7 @@
   (let [t0 (System/nanoTime)
         r  (try (v/forward-chain kb {:max-depth 3}) (catch Exception e {:error (.getMessage e)}))
         snap (prof/stop)]
-    (println (format "  chained in %.0f ms — %s" (ms t0) (pr-str (dissoc r :conclusions))))
+    (printf "  chained in %.0f ms — %s\n" (ms t0) (pr-str (dissoc r :conclusions)))
     (goal-report snap "chain")
     (read-report snap "chain")
     (fan-report snap "chain")
@@ -632,8 +632,8 @@
     (doseq [[a b] (partition 2 (stride 64 picks)) :while (< (System/nanoTime) deadline)]
       (try (count (take 200 (v/find-sentexes-all kb [a b]))) (catch Exception _ nil)))
     (let [snap (prof/stop)]
-      (println (format "  %,d vocabulary terms; %,d term pages, %,d sentexes fetched, in %.0f ms"
-                       (count vocab) @pages @fetched (ms t0)))
+      (printf "  %,d vocabulary terms; %,d term pages, %,d sentexes fetched, in %.0f ms\n"
+              (count vocab) @pages @fetched (ms t0))
       (goal-report snap "interactive")
       (read-report snap "interactive")
       (fan-report snap "interactive")
@@ -738,10 +738,10 @@
   then nothing at all, leaving no clue what it was doing when it went."
   [label ^long ran ^long total t0]
   (let [rt (Runtime/getRuntime)]
-    (println (format "    %-16s %,6d of %,6d pairs … %6.1f s, heap %.1f of %.1f GB"
-                     label ran total (/ (ms t0) 1000)
-                     (/ (- (.totalMemory rt) (.freeMemory rt)) 1073741824.0)
-                     (/ (.maxMemory rt) 1073741824.0)))
+    (printf "    %-16s %,6d of %,6d pairs … %6.1f s, heap %.1f of %.1f GB\n"
+            label ran total (/ (ms t0) 1000)
+            (/ (- (.totalMemory rt) (.freeMemory rt)) 1073741824.0)
+            (/ (.maxMemory rt) 1073741824.0))
     (flush)))
 
 (defn- churn-group!
@@ -815,17 +815,17 @@
 (defn- churn-line [label group sampled]
   (let [{:keys [done refused lost ms pairs]} group
         s (spread (map first pairs))]
-    (println (format "    %-16s %,6d of %,6d pairs, %8.1f ms%s%s%s"
-                     label done sampled (double ms)
-                     (if s
-                       (format " — median %7.3f  p95 %8.3f  max %9.3f ms"
-                               (:median s) (:p95 s) (:max s))
-                       "")
-                     (if (pos? (long refused)) (format ", %,d would not retract" refused) "")
-                     (if (pos? (long lost)) (format ", %,d LOST" lost) "")))
+    (printf "    %-16s %,6d of %,6d pairs, %8.1f ms%s%s%s\n"
+            label done sampled (double ms)
+            (if s
+              (format " — median %7.3f  p95 %8.3f  max %9.3f ms"
+                      (:median s) (:p95 s) (:max s))
+              "")
+            (if (pos? (long refused)) (format ", %,d would not retract" refused) "")
+            (if (pos? (long lost)) (format ", %,d LOST" lost) ""))
     (when (and s (< (long (:n s)) 20))
-      (println (format "    %-16s (n=%d — too few for a p95, so that column is the largest reading)"
-                       "" (:n s))))))
+      (printf "    %-16s (n=%d — too few for a p95, so that column is the largest reading)\n"
+              "" (:n s)))))
 
 (defn- churn-worst
   "The `k` costliest pairs of a group, named.  The column that would have answered *which
@@ -834,9 +834,9 @@
   [label group ^long k]
   (let [worst (take k (sort-by (comp - first) (:pairs group)))]
     (when (seq worst)
-      (println (format "    the %s pairs that cost the most:" label))
+      (printf "    the %s pairs that cost the most:\n" label)
       (doseq [[el sx] worst]
-        (println (format "      %9.3f ms  %s" el (brief sx 78)))))))
+        (printf "      %9.3f ms  %s\n" el (brief sx 78))))))
 
 (defn- retraction-count
   "How many `unindex-sentex!` calls a snapshot tallied, over every functor."
@@ -860,16 +860,16 @@
   greppable sentinel because a run that stops early has to be *told*: a bound that
   truncates quietly reads afterwards as an arm that covered everything."
   [label {:keys [why left sx]} pair-ms arm-ms]
-  (println (format "  ** SENTINEL churn arm STOPPED — the %s sample %s"
-                   label (case why
-                           :pair (format "had a pair pass its %,d ms budget" pair-ms)
-                           :arm  (format "passed its %,d ms budget" arm-ms)
-                           :heap (format "reached %.0f%% of the maximum heap"
-                                         (* 100.0 heap-ceiling)))))
+  (printf "  ** SENTINEL churn arm STOPPED — the %s sample %s\n"
+          label (case why
+                  :pair (format "had a pair pass its %,d ms budget" pair-ms)
+                  :arm  (format "passed its %,d ms budget" arm-ms)
+                  :heap (format "reached %.0f%% of the maximum heap"
+                                (* 100.0 heap-ceiling))))
   (when sx
-    (println (format "  ** the pair was %s in %s" (pr-str (:sentence sx)) (:context sx))))
-  (println (format "  ** %,d sampled facts were dropped; the tallies below cover what ran"
-                   left))
+    (printf "  ** the pair was %s in %s\n" (pr-str (:sentence sx)) (:context sx)))
+  (printf "  ** %,d sampled facts were dropped; the tallies below cover what ran\n"
+          left)
   (when (= :pair why)
     (println "  ** and the pair is abandoned rather than unwound, so this KB may hold")
     (println "  ** neither the fact nor its handle — it is spent, whatever it reads")))
@@ -941,10 +941,10 @@
         tax-sxs  (stride (max 20 (quot limit 2)) tax)]
     ;; said before the first pair rather than after the last, so a run that dies inside
     ;; one still records what the arm was attempting
-    (println (format "  %,d strided handles → %,d index-path premises, %,d taxonomy edges;"
-                     (* 4 limit) (count ix-sxs) (count tax-sxs)))
-    (println (format "  %,d ms per pair, %,d ms the index sample, %,d ms the taxonomy one"
-                     pair-ms ix-arm-ms tax-arm-ms))
+    (printf "  %,d strided handles → %,d index-path premises, %,d taxonomy edges;\n"
+            (* 4 limit) (count ix-sxs) (count tax-sxs))
+    (printf "  %,d ms per pair, %,d ms the index sample, %,d ms the taxonomy one\n"
+            pair-ms ix-arm-ms tax-arm-ms)
     (flush)
     ;; the arm's own 120 s, split rather than shared, so the second sample is never
     ;; starved by the first — with `pair-ms` on top, twice, the arm cannot run past it
@@ -961,18 +961,18 @@
                                    pair-ms tax-arm-ms)
             tax-snap (prof/stop)
             lost     (+ (long (:lost ix-r)) (long (:lost tax-r)))]
-        (println (format "  churned %,d of %,d premises sampled from %,d strided handles"
-                         (+ (long (:done ix-r)) (long (:done tax-r)))
-                         (+ (count ix-sxs) (count tax-sxs)) (* 4 limit)))
+        (printf "  churned %,d of %,d premises sampled from %,d strided handles\n"
+                (+ (long (:done ix-r)) (long (:done tax-r)))
+                (+ (count ix-sxs) (count tax-sxs)) (* 4 limit))
         (churn-line "index path" ix-r (count ix-sxs))
         (if wedged?
-          (println (format "    %-16s %,6d pairs not run — the index sample left a worker in this KB"
-                           "taxonomy edges" (count tax-sxs)))
+          (printf "    %-16s %,6d pairs not run — the index sample left a worker in this KB\n"
+                  "taxonomy edges" (count tax-sxs))
           (do (churn-line "taxonomy edges" tax-r (count tax-sxs))
-              (println (format "    → at the median a taxonomy pair cost %.1f× an index-path pair, over"
-                               (churn-ratio tax-r ix-r)))
-              (println (format "      %,d index retractions and %,d taxonomy ones.  Median rather"
-                               (retraction-count snap) (retraction-count tax-snap)))
+              (printf  "    → at the median a taxonomy pair cost %.1f× an index-path pair, over\n"
+                       (churn-ratio tax-r ix-r))
+              (printf  "      %,d index retractions and %,d taxonomy ones.  Median rather\n"
+                       (retraction-count snap) (retraction-count tax-snap))
               (println "      than mean, and the columns beside it rather than nothing: what an")
               (println "      edge costs is the size of the region it moves, and one sample holds")
               (println "      edges that move almost nothing beside edges that move the hierarchy.")
@@ -982,8 +982,8 @@
         (when-let [s (:stopped ix-r)] (churn-stopped "index path" s pair-ms ix-arm-ms))
         (when-let [s (:stopped tax-r)] (churn-stopped "taxonomy edge" s pair-ms tax-arm-ms))
         (when (pos? lost)
-          (println (format "  ** %,d were retracted and would not go back — this KB is no longer"
-                           lost))
+          (printf  "  ** %,d were retracted and would not go back — this KB is no longer\n"
+                   lost)
           (println "  ** the one the arms above measured; treat their readings as suspect"))
         (retract-report snap "churn")
         (write-report snap "churn")
@@ -993,8 +993,8 @@
 (defn -main [& args]
   (let [mode (or (first args) "starter")
         kb   (v/open-kb {})]
-    (println (format "vaelii bench-profile — %s, max heap %.1f GB"
-                     mode (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0)))
+    (printf "vaelii bench-profile — %s, max heap %.1f GB\n"
+            mode (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0))
     ;; the load arm runs under the instrument, so the write tally is the real one: every
     ;; assert the corpus makes, not a re-indexed sample of them
     (prof/start)

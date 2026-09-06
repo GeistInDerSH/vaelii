@@ -119,11 +119,11 @@
 (defn- report-sizes [kb label]
   (let [c (cache-sizes kb)
         n (memo-census kb)]
-    (println (format "  %-22s closure-memo %8.2f MB (%,d unscoped / %,d scoped over %,d vissets, %d relations)"
-                     label (mb (:closure-memo c)) (:unscoped n) (:scoped n)
-                     (:vissets n) (count (:relations n))))
-    (println (format "  %-22s vis-index    %8.2f MB   literal-cache %,d entries   live heap %8.2f MB"
-                     "" (mb (:vis-index c)) (:literal c) (mb (:heap-live c))))
+    (printf "  %-22s closure-memo %8.2f MB (%,d unscoped / %,d scoped over %,d vissets, %d relations)\n"
+            label (mb (:closure-memo c)) (:unscoped n) (:scoped n)
+            (:vissets n) (count (:relations n)))
+    (printf "  %-22s vis-index    %8.2f MB   literal-cache %,d entries   live heap %8.2f MB\n"
+            "" (mb (:vis-index c)) (:literal c) (mb (:heap-live c)))
     (assoc c :census n)))
 
 ;; ---- reading 2: does anything grow with the query count? ----------------
@@ -143,17 +143,17 @@
   bounded by nothing keeps climbing as the same terms are re-read from more contexts."
   [kb terms ctxs rounds]
   (banner "ops-5 reading 2 — growth over a query stream")
-  (println (format "  %,d terms × %,d contexts × %d rounds" (count terms) (count ctxs) rounds))
+  (printf "  %,d terms × %,d contexts × %d rounds\n" (count terms) (count ctxs) rounds)
   (println)
-  (println (format "  %-8s %-14s %-14s %-14s %s" "round" "unscoped" "scoped" "vissets" "retained MB"))
+  (printf "  %-8s %-14s %-14s %-14s %s\n" "round" "unscoped" "scoped" "vissets" "retained MB")
   (doseq [r (range 1 (inc rounds))]
     (doseq [ctx ctxs] (taxonomy-sweep! kb terms ctx))
     (let [n (memo-census kb)
           _ (settle-heap!)
           b (postings/retained [(closure-memo kb)])]
-      (println (format "  %-8d %-14s %-14s %-14s %.2f"
-                       r (format "%,d" (:unscoped n)) (format "%,d" (:scoped n))
-                       (format "%,d" (:vissets n)) (mb b))))))
+      (printf "  %-8d %-14s %-14s %-14s %.2f\n"
+              r (format "%,d" (:unscoped n)) (format "%,d" (:scoped n))
+              (format "%,d" (:vissets n)) (mb b)))))
 
 ;; ---- reading 3: what a full clear costs to rebuild -----------------------
 
@@ -170,10 +170,10 @@
         t1 (System/nanoTime)
         _  (taxonomy-sweep! kb terms ctx)
         cold (ms t1)]
-    (println (format "  warm sweep %8.1f ms      cold sweep %8.1f ms      ratio %.1f×"
-                     warm cold (if (pos? warm) (/ cold warm) 0.0)))
-    (println (format "  %,d terms, so %.3f ms/term cold — the pause a wholesale clear buys back"
-                     (count terms) (/ cold (max 1 (count terms)))))
+    (printf "  warm sweep %8.1f ms      cold sweep %8.1f ms      ratio %.1f×\n"
+            warm cold (if (pos? warm) (/ cold warm) 0.0))
+    (printf "  %,d terms, so %.3f ms/term cold — the pause a wholesale clear buys back\n"
+            (count terms) (/ cold (max 1 (count terms))))
     {:warm warm :cold cold}))
 
 ;; ---- ops-6: which rules never fire --------------------------------------
@@ -209,9 +209,9 @@
 (defn- report-firings [kb handles label]
   (let [c (firing-census kb handles)
         t (count handles)]
-    (println (format "  %-24s %,d rules — %,d never fired, %,d fired but every conclusion defeated, %,d live (%,d firings)"
-                     label t (count (:never c)) (count (:all-defeated c))
-                     (count (:fired c)) (:firings c)))
+    (printf "  %-24s %,d rules — %,d never fired, %,d fired but every conclusion defeated, %,d live (%,d firings)\n"
+            label t (count (:never c)) (count (:all-defeated c))
+            (count (:fired c)) (:firings c))
     c))
 
 ;; ---- ops-6: extent skew --------------------------------------------------
@@ -241,14 +241,14 @@
         bucket (fn [n] (if (zero? n) 0 (int (Math/floor (Math/log10 (double n))))))
         hist   (frequencies (map bucket vals*))
         top    (take 15 (sort-by (comp - val) counts))]
-    (println (format "  %,d predicates, %,d with an extent, %,d stored facts, Gini %.4f"
-                     (count preds) (count vals*) total (gini vals*)))
+    (printf "  %,d predicates, %,d with an extent, %,d stored facts, Gini %.4f\n"
+            (count preds) (count vals*) total (gini vals*))
     (println "  order-of-magnitude buckets (10^k ≤ extent < 10^k+1):")
     (doseq [k (sort (keys hist))]
-      (println (format "    10^%-2d  %,8d predicates" k (get hist k))))
+      (printf "    10^%-2d  %,8d predicates\n" k (get hist k)))
     (println "  the heaviest:")
     (doseq [[p n] top]
-      (println (format "    %,10d  %s" n p)))
+      (printf "    %,10d  %s\n" n p))
     {:gini (gini vals*) :predicates (count preds) :with-extent (count vals*) :total total}))
 
 ;; ---- ops-6: taxonomy coverage -------------------------------------------
@@ -270,12 +270,12 @@
                                      (seq (rest (v/specs kb % ctx))))) terms)
         reach  (frequencies (mapcat #(disj (get ups %) %) terms))
         [root cnt] (or (first (sort-by (comp - val) reach)) [nil 0])]
-    (println (format "  %,d types — %,d with a genl edge (%.1f%%)"
-                     n (count edged) (* 100.0 (/ (count edged) (max 1 n)))))
-    (println (format "  most-reached type is `%s`, reached by %,d (%.1f%%)"
-                     root cnt (* 100.0 (/ cnt (max 1 n)))))
-    (println (format "  the gap — edged but not reaching it — is %,d types in disconnected islands"
-                     (max 0 (- (count edged) cnt))))
+    (printf "  %,d types — %,d with a genl edge (%.1f%%)\n"
+            n (count edged) (* 100.0 (/ (count edged) (max 1 n))))
+    (printf "  most-reached type is `%s`, reached by %,d (%.1f%%)\n"
+            root cnt (* 100.0 (/ cnt (max 1 n))))
+    (printf "  the gap — edged but not reaching it — is %,d types in disconnected islands\n"
+            (max 0 (- (count edged) cnt)))
     {:types n :edged (count edged) :root root :rooted cnt}))
 
 ;; ---- ops-6: chain depth over the rule graph ------------------------------
@@ -358,12 +358,12 @@
                  depths))
         hist (frequencies (vals ds))
         cyc  (count (filter #(> (count %) 1) comps))]
-    (println (format "  %,d functors, %,d components (%,d cyclic, largest %,d), computed in %.0f ms"
-                     (count (into #{} (concat (keys g) (mapcat val g))))
-                     (count comps) cyc (reduce max 0 (map count comps)) (ms t0)))
+    (printf "  %,d functors, %,d components (%,d cyclic, largest %,d), computed in %.0f ms\n"
+            (count (into #{} (concat (keys g) (mapcat val g))))
+            (count comps) cyc (reduce max 0 (map count comps)) (ms t0))
     (println "  depth distribution over components:")
     (doseq [d (sort (keys hist))]
-      (println (format "    depth %-3d  %,8d components" d (get hist d))))
+      (printf "    depth %-3d  %,8d components\n" d (get hist d)))
     {:components (count comps) :cyclic cyc :depths hist :ms (ms t0)}))
 
 ;; ---- the run ------------------------------------------------------------
@@ -378,29 +378,29 @@
                                      :on-progress (fn [{:keys [done note]}]
                                                     (when (zero? (mod (long done) 100000))
                                                       (swap! seen (constantly done))
-                                                      (println (format "    %,10d sentences … %s"
-                                                                       done (or note "")))
+                                                      (printf "    %,10d sentences … %s\n"
+                                                              done (or note ""))
                                                       (flush)))})]
-    (println (format "  asserted %,d, refused %,d over %,d contexts in %.0f s"
-                     (:asserted r) (:refused r) (:contexts r) (/ (ms t0) 1000)))
+    (printf "  asserted %,d, refused %,d over %,d contexts in %.0f s\n"
+            (:asserted r) (:refused r) (:contexts r) (/ (ms t0) 1000))
     (when (seq (:refusals r))
       (println "  refusals by reason:")
       (doseq [[k n] (sort-by (comp - val) (:refusals r))]
-        (println (format "    %-28s %,d" k n))))
+        (printf "    %-28s %,d\n" k n)))
     r))
 
 (defn -main [& [target profile-arg chain-arg]]
   (let [quick?  (or (nil? target) (= "quick" target))
         profile (keyword (or profile-arg "ontology"))
         kb      (v/open-kb {})]
-    (println (format "vaelii bench-caches — %s, max heap %.1f GB"
-                     (if quick? "starter ontology (harness check)" target)
-                     (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0)))
+    (printf "vaelii bench-caches — %s, max heap %.1f GB\n"
+            (if quick? "starter ontology (harness check)" target)
+            (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0))
     (if quick?
       (do (banner "loading the starter ontology")
           (let [t0 (System/nanoTime)]
             (starter/load-into kb)
-            (println (format "  %,d sentexes in %.0f ms" (v/sentex-count kb) (ms t0)))))
+            (printf "  %,d sentexes in %.0f ms\n" (v/sentex-count kb) (ms t0))))
       (load-corpus! kb target profile))
 
     (let [all-ctx (vec (v/contexts kb))
@@ -413,9 +413,9 @@
           sample  (vec (take (if quick? 500 10000) types))
           ctxs    (vec (take (if quick? 4 10) all-ctx))
           handles (do (banner "enumerating rules") (rule-handles kb))]
-      (println (format "  reads scoped to %s" ctx))
-      (println (format "  %,d types, %,d contexts, %,d rules"
-                       (count types) (count (v/contexts kb)) (count handles)))
+      (printf "  reads scoped to %s\n" ctx)
+      (printf "  %,d types, %,d contexts, %,d rules\n"
+              (count types) (count (v/contexts kb)) (count handles))
 
       (banner "ops-5 reading 1 — what the caches hold")
       (report-sizes kb "cold (nothing read)")
@@ -432,9 +432,9 @@
       (when (or quick? (= "chain" chain-arg))
         (let [t0 (System/nanoTime)
               r  (v/forward-chain kb)]
-          (println (format "  forward-chain derived %,d in %.0f s%s"
-                           (:derived r) (/ (ms t0) 1000)
-                           (if (:truncated? r) " (TRUNCATED)" "")))
+          (printf "  forward-chain derived %,d in %.0f s%s\n"
+                  (:derived r) (/ (ms t0) 1000)
+                  (if (:truncated? r) " (TRUNCATED)" ""))
           (report-firings kb handles "after forward-chain:")))
 
       (extent-skew kb)
@@ -442,5 +442,5 @@
       (chain-depth kb handles)
 
       (banner "done")
-      (println (format "  live heap %.2f MB" (mb (heap-live))))
+      (printf "  live heap %.2f MB\n" (mb (heap-live)))
       (flush))))

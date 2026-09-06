@@ -337,43 +337,43 @@
 
 (defn- shape-table [m]
   (println "\n══ bytes per lookup, by pattern shape ══")
-  (println (format "  %-11s %-11s %9s %9s %12s %10s %8s"
-                   "shape" "layout" "probes" "handles" "B/lookup" "B/probe" "kv/col"))
+  (printf  "  %-11s %-11s %9s %9s %12s %10s %8s\n"
+           "shape" "layout" "probes" "handles" "B/lookup" "B/probe" "kv/col")
   (println (rule 76))
   (doseq [[shape blurb] shapes]
     (let [{:keys [probes handles memory columnar]} (m shape)]
-      (println (format "  %-11s %-11s %9.1f %9.1f %12s %10s"
-                       (name shape) ":memory" probes handles
-                       (fmt memory) (fmt (/ (double memory) probes))))
-      (println (format "  %-11s %-11s %9s %9s %12s %10s %7.2f×"
-                       "" ":columnar" "" "" (fmt columnar)
-                       (fmt (/ (double columnar) probes))
-                       (/ (double memory) (double columnar))))
-      (println (format "  %-11s %s" "" blurb)))))
+      (printf "  %-11s %-11s %9.1f %9.1f %12s %10s\n"
+              (name shape) ":memory" probes handles
+              (fmt memory) (fmt (/ (double memory) probes)))
+      (printf "  %-11s %-11s %9s %9s %12s %10s %7.2f×\n"
+              "" ":columnar" "" "" (fmt columnar)
+              (fmt (/ (double columnar) probes))
+              (/ (double memory) (double columnar)))
+      (printf "  %-11s %s\n" "" blurb))))
 
 (defn- marginal-table [m fc]
   (println "\n══ the marginal cost of a frontier node, per regime ══")
-  (println (format "  %-26s %13s %13s %8s" "regime" ":memory B" ":columnar B" "kv/col"))
+  (printf  "  %-26s %13s %13s %8s\n" "regime" ":memory B" ":columnar B" "kv/col")
   (println (rule 64))
   (doseq [[label base wide]
           [["ground probe at width" :exact :after-var]
            ["fanned child edge"     :exact :lead-open]]]
     (let [k (slope m base wide :memory)
           c (slope m base wide :columnar)]
-      (println (format "  %-26s %13s %13s %7.2f×" label (fmt k) (fmt c) (/ k c)))))
+      (printf "  %-26s %13s %13s %7.2f×\n" label (fmt k) (fmt c) (/ k c))))
   (println "\n  Both walks also rebuild one `(into [] (mapcat f) frontier)` per pattern")
-  (println (format "  level, measured at %s B over a one-node frontier — a layout-independent" (fmt fc)))
+  (printf  "  level, measured at %s B over a one-node frontier — a layout-independent\n" (fmt fc))
   (println "  constant, and on a narrowing walk the largest single term in the lookup."))
 
 (defn- cold-warm-table [cold m]
   (println "\n══ cold and warm — what escape analysis removes once the walk is hot ══")
-  (println (format "  %-11s %14s %14s %9s" "layout" "cold B/lookup" "warm B/lookup" "removed"))
+  (printf  "  %-11s %14s %14s %9s\n" "layout" "cold B/lookup" "warm B/lookup" "removed")
   (println (rule 52))
   (doseq [[label layout] [[":memory" :memory] [":columnar" :columnar]]]
     (let [c (double (cold layout))
           w (double (get-in m [:exact layout]))]
-      (println (format "  %-11s %14s %14s %8.1f%%"
-                       label (fmt c) (fmt w) (* 100.0 (- 1.0 (/ w (max 1.0 c))))))))
+      (printf "  %-11s %14s %14s %8.1f%%\n"
+              label (fmt c) (fmt w) (* 100.0 (- 1.0 (/ w (max 1.0 c)))))))
   (println "  Cold is the first pass in this JVM, taken before anything else runs; the two")
   (println "  arms share the transducer and protocol code, so the second is already")
   (println "  part-warmed. The direction is the reading, not the magnitude."))
@@ -381,35 +381,35 @@
 (defn- derivation-table [m fc len]
   (let [s (sizes)]
     (println "\n══ objects per ground-token probe, derived from the source ══")
-    (println (format "  %-11s %-58s %8s" "layout" "what the walk names" "objects"))
+    (printf  "  %-11s %-58s %8s\n" "layout" "what the walk names" "objects")
     (println (rule 79))
     (doseq [layout [:memory :columnar]]
       (doseq [[what objs _] (ground-probe layout)]
-        (println (format "  %-11s %-58s %8d" (str layout) what (long objs))))
-      (println (format "  %-11s %-58s %8d" "" "total" (derived-objects layout))))
-    (println (format "\n  jol shallow sizes: PersistentVector %d B, boxed int %d B, tokens/Key %d B,"
-                     (long (:vector s)) (long (:box s)) (long (:key s))))
-    (println (format "  Object[1] %d B, Object[3] %d B, Object[5] %d B"
-                     (long ((:array s) 1)) (long ((:array s) 3)) (long ((:array s) 5))))
+        (printf "  %-11s %-58s %8d\n" (str layout) what (long objs)))
+      (printf "  %-11s %-58s %8d\n" "" "total" (derived-objects layout)))
+    (printf  "\n  jol shallow sizes: PersistentVector %d B, boxed int %d B, tokens/Key %d B,\n"
+             (long (:vector s)) (long (:box s)) (long (:key s)))
+    (printf  "  Object[1] %d B, Object[3] %d B, Object[5] %d B\n"
+             (long ((:array s) 1)) (long ((:array s) 3)) (long ((:array s) 5)))
     (println "\n══ the accounting, on the one shape whose walk has no fan ══")
-    (println (format "  %-11s %10s %12s %12s %12s %10s"
-                     "layout" "probes B" "frontier B" "accounted" "measured" "residual"))
+    (printf  "  %-11s %10s %12s %12s %12s %10s\n"
+             "layout" "probes B" "frontier B" "accounted" "measured" "residual")
     (println (rule 74))
     (doseq [layout [:memory :columnar]]
       (let [d   (derived-bytes layout len s)
             f   (* fc len)
             acc (+ d f)
             msd (double (get-in m [:exact layout]))]
-        (println (format "  %-11s %10s %12s %12s %12s %9.0f%%"
-                         (str layout) (fmt (double d)) (fmt f) (fmt acc) (fmt msd)
-                         (* 100.0 (- 1.0 (/ acc msd)))))))
+        (printf "  %-11s %10s %12s %12s %12s %9.0f%%\n"
+                (str layout) (fmt (double d)) (fmt f) (fmt acc) (fmt msd)
+                (* 100.0 (- 1.0 (/ acc msd))))))
     (println "  The residual is the seq cells `mapcat` builds, the answer set at the")
     (println "  terminus, and the seq the pattern is walked as.")))
 
 (defn- depth-sweep [cfg opts fc]
   (println "\n══ path length — the prefix the flat-map walk rebuilds at every probe ══")
-  (println (format "  %-8s %-11s %7s %12s %14s %12s"
-                   "arity" "layout" "levels" "B/lookup" "B/extra level" "predicted"))
+  (printf  "  %-8s %-11s %7s %12s %14s %12s\n"
+           "arity" "layout" "levels" "B/lookup" "B/extra level" "predicted")
   (println (rule 70))
   (let [prev (volatile! {})
         s    (sizes)]
@@ -422,14 +422,14 @@
           (let [b (measure store paths opts)
                 [pl pb] (@prev layout [len b])]
             (vswap! prev assoc layout [len b])
-            (println (format "  %-8d %-11s %7d %12s %14s %12s"
-                             arity label len (fmt b)
-                             (if (= len (long pl))
-                               "-"
-                               (fmt (/ (- b (double pb)) (- len (long pl)))))
-                             (if (= len (long pl))
-                               "-"
-                               (fmt (+ fc (double (probe-bytes layout (dec len) s)))))))))))
+            (printf "  %-8d %-11s %7d %12s %14s %12s\n"
+                    arity label len (fmt b)
+                    (if (= len (long pl))
+                      "-"
+                      (fmt (/ (- b (double pb)) (- len (long pl)))))
+                    (if (= len (long pl))
+                      "-"
+                      (fmt (+ fc (double (probe-bytes layout (dec len) s))))))))))
     (println "  `predicted` is the measured frontier container plus the derived probe at that")
     (println "  level, and it is the whole accounting closing on itself. It runs high on")
     (println "  `:columnar` because `Integer/valueOf` caches -128..127, so the subtree-count")
@@ -449,10 +449,10 @@
                :ctxs  (mapv #(symbol (str "CxACtx" %)) (range 4))}
         opts  {:warm 12 :blocks 20}
         floor (instrument-floor 1000)]
-    (println (format "vaelii index-lookup allocation bake-off — %,d facts, arity 2" n))
+    (printf  "vaelii index-lookup allocation bake-off — %,d facts, arity 2\n" n)
     (println "Allocated bytes are structural the way retained heap is, so they are trusted")
     (println "under contention. Nothing here is a duration.")
-    (println (format "instrument: ThreadMXBean/getCurrentThreadAllocatedBytes, floor %d B" floor))
+    (printf  "instrument: ThreadMXBean/getCurrentThreadAllocatedBytes, floor %d B\n" floor)
     (let [sxs      (gen-facts cfg)
           [kv col] (stores sxs)
           wl       (workload sxs)
@@ -464,8 +464,8 @@
         (when-not (agree? kv col (wl shape))
           (throw (ex-info "the two layouts disagree — a cost comparison would be meaningless"
                           {:shape shape}))))
-      (println (format "both layouts agree on every answer: %d patterns over %d shapes"
-                       (reduce + (map count (vals wl))) (count shapes)))
+      (printf "both layouts agree on every answer: %d patterns over %d shapes\n"
+              (reduce + (map count (vals wl))) (count shapes))
       (let [m  (into {}
                      (map (fn [[shape _]]
                             (let [paths   (wl shape)
@@ -481,5 +481,5 @@
         (derivation-table m fc (count (first exact)))
         ;; last, because it rebuilds both stores over corpora of other arities
         (depth-sweep cfg opts fc)))
-    (println (format "\n(checksum %d)" @sink))
+    (printf "\n(checksum %d)\n" @sink)
     (shutdown-agents)))

@@ -113,16 +113,16 @@
             [["RCC-8 containment tree" containment-tree space/rcc8]
              ["Allen total order"      interval-chain   iv/allen]]]
       (println (str "  " label))
-      (println (format "  %-8s %10s %14s %10s %10s %10s %8s %10s"
-                       "nodes" "facts" "triples/pass" "read ms" "queue ms" "naive ms" "speedup" "pinned"))
+      (printf  "  %-8s %10s %14s %10s %10s %10s %8s %10s\n"
+               "nodes" "facts" "triples/pass" "read ms" "queue ms" "naive ms" "speedup" "pinned")
       (println (str "  " (apply str (repeat 88 \-))))
       (doseq [n sizes]
         (let [{:keys [n facts triples read-ms pass-ms naive-ms pinned]} (bench-one label load calc n)]
-          (println (format "  %-8s %10s %14s %10.2f %10.2f %10.2f %7.2fx %10s"
-                           (format "%,d" n) (format "%,d" facts) (format "%,d" triples)
-                           read-ms pass-ms naive-ms
-                           (if (pos? pass-ms) (/ naive-ms pass-ms) 0.0)
-                           (format "%,d" (or pinned 0))))))
+          (printf "  %-8s %10s %14s %10.2f %10.2f %10.2f %7.2fx %10s\n"
+                  (format "%,d" n) (format "%,d" facts) (format "%,d" triples)
+                  read-ms pass-ms naive-ms
+                  (if (pos? pass-ms) (/ naive-ms pass-ms) 0.0)
+                  (format "%,d" (or pinned 0)))))
       (println))
     (println "  Reading:")
     (println "  - triples/pass is n(n-1)(n-2), and BOTH implementations make one full sweep of it,")

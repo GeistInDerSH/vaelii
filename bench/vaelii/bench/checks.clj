@@ -107,8 +107,8 @@
     (let [[s c] (nth samples i)] (f s c)))
   (let [[hits ns] (timed (reduce (fn [acc [s c]] (if (f s c) (inc acc) acc)) 0 samples))
         per       (double (/ ns (count samples)))]
-    (println (format "  %-18s %9.1f µs/call   %,10.0f calls/s   (%,d of %,d flagged)"
-                     label (/ per 1000.0) (/ 1e9 per) (long hits) (count samples)))
+    (printf "  %-18s %9.1f µs/call   %,10.0f calls/s   (%,d of %,d flagged)\n"
+            label (/ per 1000.0) (/ 1e9 per) (long hits) (count samples))
     per))
 
 (defn- report-shape [kb opts ctx]
@@ -116,20 +116,20 @@
         i0  (ind-name 0)
         ts  (v/types-of kb i0 ctx)
         gs  (mapv #(count (tax/genls t % ctx)) ts)]
-    (println (format "shape: %,d types (branching %d), %,d individuals, %,d disjoint pairs"
-                     (long (:types opts)) (long (:branching opts))
-                     (long (:individuals opts)) (long (:disjoints opts))))
-    (println (format "       a sampled term holds %d types; their genl closures are %s"
-                     (count ts) (pr-str gs)))
-    (println (format "       so the disjointness walk is ~%,d pair tests per assert"
-                     (long (* (count ts) (apply max 1 gs) (apply max 1 gs)))))))
+    (printf "shape: %,d types (branching %d), %,d individuals, %,d disjoint pairs\n"
+            (long (:types opts)) (long (:branching opts))
+            (long (:individuals opts)) (long (:disjoints opts)))
+    (printf "       a sampled term holds %d types; their genl closures are %s\n"
+            (count ts) (pr-str gs))
+    (printf "       so the disjointness walk is ~%,d pair tests per assert\n"
+            (long (* (count ts) (apply max 1 gs) (apply max 1 gs))))))
 
 (defn- run [opts]
   (let [kb  (v/open-kb {:recover? false})
         _   (v/clear! kb)
         [ctx build-ns] (timed (build! kb opts))]
-    (println (format "\nbuilt %,d sentexes in %.1f s\n"
-                     (long (v/sentex-count kb)) (/ build-ns 1e9)))
+    (printf "\nbuilt %,d sentexes in %.1f s\n\n"
+            (long (v/sentex-count kb)) (/ build-ns 1e9))
     (report-shape kb opts ctx)
     (let [t (:taxonomy kb)]
       (println "\nthe primitives the checks are built out of")
@@ -150,7 +150,7 @@
       (println "\nargIsa arm — a binary fact against its predicate's constraints")
       (let [b (binary-samples opts ctx)]
         (run-arm "  the arg lookup" (fn [s c] (seq (res/matches-visible
-                                                       kb (list 'arg (first s) '?n '?type) c))) b)
+                                                    kb (list 'arg (first s) '?n '?type) c))) b)
         (run-arm "  memberships x1" (fn [s c] (seq (:types (kb/memberships kb (second s) c)))) b)
         (run-arm "arity-problem" (fn [s c] (#'checks/arity-problem kb s c (types c))) b)
         (run-arm "args-problem" (fn [s c] (#'checks/args-problem kb s c (types c))) b)

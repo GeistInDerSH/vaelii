@@ -609,9 +609,9 @@
                                    :provider (ollama/generation-provider {:timeout-ms 600000})
                                    :num-ctx 16384 :max-candidates 30 :max-tokens 4096})
                             s (score/score kb ctx (map :sentence (:candidates p)))]
-                        (println (format "\n%s  %s  %d ms  %s"
-                                         ctx (:status p) (:elapsed-ms p)
-                                         (pr-str (:summary p))))
+                        (printf  "\n%s  %s  %d ms  %s\n"
+                                 ctx (:status p) (:elapsed-ms p)
+                                 (pr-str (:summary p)))
                         (println "  coverage" (pr-str (:coverage p)))
                         (println "  coined  " (pr-str (mapv :predicate (:coined p))))
                         (doseq [m (:missing s)] (println "  missing " (pr-str m)))

@@ -96,8 +96,8 @@
         (v/assert kb s c {:chain? false})
         (when (zero? (mod i 500)) (.add sample [s c]))
         (when (and (pos? i) (zero? (mod i 50000)))
-          (println (format "  … %,d asserts (%.0f/s, untrusted)" i
-                           (/ i (/ (- (System/nanoTime) t0) 1e9)))))))
+          (printf "  … %,d asserts (%.0f/s, untrusted)\n" i
+                  (/ i (/ (- (System/nanoTime) t0) 1e9))))))
     {:ms (ms t0) :sample (vec sample)}))
 
 (defn- load-with-rule!
@@ -133,21 +133,21 @@
         per    #(double (/ % (max 1 stored)))
         at100_m #(/ (* (per %) 1e8) GiB)]
     (println)
-    (println (format "── %s ── %,d stored sentexes, %,d justifications | JTMS %,d nodes, %,d justifications"
-                     label stored dedns nodes justs))
-    (println (format "%-14s %14s %14s %16s" "component" "MB" "bytes/fact" "@100M (GB)"))
+    (printf  "── %s ── %,d stored sentexes, %,d justifications | JTMS %,d nodes, %,d justifications\n"
+             label stored dedns nodes justs)
+    (printf  "%-14s %14s %14s %16s\n" "component" "MB" "bytes/fact" "@100M (GB)")
     (println (apply str (repeat 62 \-)))
     (doseq [k [:index :records :jtms :taxonomy]]
       (let [b (sizes k)]
-        (println (format "%-14s %14.1f %14.0f %16.1f"
-                         (name k) (/ b 1048576.0) (per b) (at100_m b)))))
+        (printf "%-14s %14.1f %14.0f %16.1f\n"
+                (name k) (/ b 1048576.0) (per b) (at100_m b))))
     (let [sum (reduce + (vals sizes))]
       (println (apply str (repeat 62 \-)))
-      (println (format "%-14s %14.1f %14.0f %16.1f" "sum-of-parts" (/ sum 1048576.0) (per sum) (at100_m sum)))
-      (println (format "%-14s %14.1f %14.0f %16.1f  (shared structure counted once)"
-                       "deduped total" (/ combined 1048576.0) (per combined) (at100_m combined)))
-      (println (format "%-14s %14.1f %14.0f %16.1f  (whole KB graph)"
-                       "whole-kb (jol)" (/ whole 1048576.0) (per whole) (at100_m whole))))
+      (printf "%-14s %14.1f %14.0f %16.1f\n" "sum-of-parts" (/ sum 1048576.0) (per sum) (at100_m sum))
+      (printf "%-14s %14.1f %14.0f %16.1f  (shared structure counted once)\n"
+              "deduped total" (/ combined 1048576.0) (per combined) (at100_m combined))
+      (printf "%-14s %14.1f %14.0f %16.1f  (whole KB graph)\n"
+              "whole-kb (jol)" (/ whole 1048576.0) (per whole) (at100_m whole)))
     {:stored stored :dedns dedns :nodes nodes :justs justs :sizes sizes :jtms (:jtms sizes)}))
 
 (defn- config [n]
@@ -178,9 +178,9 @@
         spaceA (space-for n 20)
         spaceB (space-for (* 2 rn) 22)          ; Run B's rule derives a twin per fact
         xmx    (/ (.maxMemory (Runtime/getRuntime)) GiB)]
-    (println (format "vaelii scale harness (Phase 0) — %,d premise facts, %,d rule facts — TMS :%s — -Xmx≈%.1f GB"
-                     n rn (name tms) xmx))
-    (println (format "spaces: Run A :space %d, Run B :space %d" spaceA spaceB))
+    (printf  "vaelii scale harness (Phase 0) — %,d premise facts, %,d rule facts — TMS :%s — -Xmx≈%.1f GB\n"
+             n rn (name tms) xmx)
+    (printf  "spaces: Run A :space %d, Run B :space %d\n" spaceA spaceB)
     (println "RAM-by-component is jol retained size: structural, contention-immune → TRUSTED.")
     (println "Wall-clock (load/s, reindex, recover) is UNTRUSTED while another load runs on this box.")
 
@@ -194,9 +194,9 @@
         ;; ---- untrusted wall-clock, on the same populated KB ----
         (println)
         (println "── wall-clock (UNTRUSTED under contention; re-run solo) ──")
-        (println (format "  load          : %.1f s  (%,.0f facts/s)" (/ lms 1000.0) (/ (:stored a) (/ lms 1000.0))))
-        (let [t0 (System/nanoTime) r (v/reindex kb)] (println (format "  reindex index : %.1f s  (%s)" (/ (ms t0) 1000.0) (pr-str r))))
-        (let [t0 (System/nanoTime)] (v/recover kb)   (println (format "  recover tms+tax: %.1f s" (/ (ms t0) 1000.0))))))
+        (printf  "  load          : %.1f s  (%,.0f facts/s)\n" (/ lms 1000.0) (/ (:stored a) (/ lms 1000.0)))
+        (let [t0 (System/nanoTime) r (v/reindex kb)] (printf "  reindex index : %.1f s  (%s)\n" (/ (ms t0) 1000.0) (pr-str r)))
+        (let [t0 (System/nanoTime)] (v/recover kb)   (printf "  recover tms+tax: %.1f s\n" (/ (ms t0) 1000.0)))))
 
     ;; ---- Run B: rules fire (the per-justification / justification cost) ----
     (let [kb  (v/open-kb {:backend :memory :space spaceB :tms tms :recover? false})
@@ -206,7 +206,7 @@
       (gc!)
       (let [b (report-components kb "Run B: one forward rule firing per fact")]
         (println)
-        (println (format "  chained load  : %.1f s  (%,.0f facts/s, UNTRUSTED)" (/ lms 1000.0) (/ rn (/ lms 1000.0))))
-        (println (format "  JTMS per (node+just): ≈ %.0f bytes  over %,d nodes + %,d justs"
-                         (double (/ (:jtms b) (max 1 (+ (:nodes b) (:justs b))))) (:nodes b) (:justs b)))))
+        (printf "  chained load  : %.1f s  (%,.0f facts/s, UNTRUSTED)\n" (/ lms 1000.0) (/ rn (/ lms 1000.0)))
+        (printf "  JTMS per (node+just): ≈ %.0f bytes  over %,d nodes + %,d justs\n"
+                (double (/ (:jtms b) (max 1 (+ (:nodes b) (:justs b))))) (:nodes b) (:justs b))))
     (shutdown-agents)))

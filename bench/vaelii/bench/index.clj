@@ -482,25 +482,25 @@
   (let [paths (vec (sort (into #{} (mapcat (comp keys :paths second)) rows)))
         ids   (mapv first rows)]
     (println)
-    (println (format "    %-22s %s" "access path"
-                     (str/join " " (map #(format "%14s" (name %)) ids))))
+    (printf  "    %-22s %s" "access path\n"
+             (str/join " " (map #(format "%14s" (name %)) ids)))
     (println (str "    " (apply str (repeat (+ 22 (* 15 (count ids))) "-"))))
     (doseq [pth paths]
-      (println (format "    %-22s %s" (name pth)
-                       (str/join " " (map (fn [[_ r]]
-                                            (format "%14s"
-                                                    (if-let [n (get (:paths r) pth)]
-                                                      (format "%,d" n)
-                                                      "·")))
-                                          rows)))))
+      (printf "    %-22s %s\n" (name pth)
+              (str/join " " (map (fn [[_ r]]
+                                   (format "%14s"
+                                           (if-let [n (get (:paths r) pth)]
+                                             (format "%,d" n)
+                                             "·")))
+                                 rows))))
     (println)
     (let [ref (:paths (get (into {} rows) reference-id))]
       (doseq [[id r] rows
               :when (not= id reference-id)]
         (if (= ref (:paths r))
-          (println (format "    %-16s same path histogram as %s" (name id) (name reference-id)))
-          (println (format "    %-16s ** DIVERGES from %s — this layout answers by a different path,"
-                           (name id) (name reference-id))))))
+          (printf "    %-16s same path histogram as %s\n" (name id) (name reference-id))
+          (printf "    %-16s ** DIVERGES from %s — this layout answers by a different path,\n"
+                  (name id) (name reference-id)))))
     (println)
     (println "    A divergence is not a failure: `no-arg-roots` and `fan-out` exist to move the")
     (println "    path, and their rows are what the move looks like.  It is a failure when a")
@@ -516,18 +516,18 @@
                           [gi g i]))
                       (map-indexed vector groups))]
         (if (empty? bad)
-          (println (format "    %-16s %,10d answers over %,d probes, %,d sentexes — identical to %s"
-                           (name id) (:answers r) (:probes r) (:sentexes r) (name reference-id)))
+          (printf "    %-16s %,10d answers over %,d probes, %,d sentexes — identical to %s\n"
+                  (name id) (:answers r) (:probes r) (:sentexes r) (name reference-id))
           (do
-            (println (format "    %-16s ** WRONG — %d of %d groups differ; every timing below is void"
-                             (name id) (count bad) (count groups)))
+            (printf "    %-16s ** WRONG — %d of %d groups differ; every timing below is void\n"
+                    (name id) (count bad) (count groups))
             (doseq [[gi g i] (take 3 bad)
                     :let [pat (nth (:pats g) i)]]
-              (println (format "        %-24s %s" (:label g) (pr-str pat)))
-              (println (format "        %s answered %s, %s answered %s — re-run both as"
-                               (name reference-id) (pr-str (first (nth (nth (:fp ref) gi) i)))
-                               (name id) (pr-str (first (nth (nth (:fp r) gi) i)))))
-              (println (format "        (levels/lookup kb %d '%s '?ctx)" (:level g) (pr-str pat))))))))))
+              (printf "        %-24s %s\n" (:label g) (pr-str pat))
+              (printf "        %s answered %s, %s answered %s — re-run both as\n"
+                      (name reference-id) (pr-str (first (nth (nth (:fp ref) gi) i)))
+                      (name id) (pr-str (first (nth (nth (:fp r) gi) i))))
+              (printf "        (levels/lookup kb %d '%s '?ctx)\n" (:level g) (pr-str pat)))))))))
 
 (defn- build-report [rows]
   (banner "BUILD AND BYTES — what the layout costs to hold")
@@ -537,29 +537,29 @@
   (println "  preceded by two discarded starter loads, so no layout pays the JIT for the rest.")
   (println "  An access-path layout reads the reference's own index, so it has neither.")
   (println)
-  (println (format "    %-18s %12s %14s %12s %10s  %s"
-                   "layout" "build ms" "index MB" "bytes/sentex" "vs kv" "note"))
+  (printf  "    %-18s %12s %14s %12s %10s  %s\n"
+           "layout" "build ms" "index MB" "bytes/sentex" "vs kv" "note")
   (println (str "    " (apply str (repeat 100 "-"))))
   (let [ref (get (into {} rows) reference-id)]
     (doseq [[id r] rows]
       (if (= :access (:axis r))
-        (println (format "    %-18s %12s %14s %12s %10s  %s"
-                         (name id) "shared" "shared" "shared" "—" (:note r)))
-        (println (format "    %-18s %12.0f %14s %12s %10s  %s"
-                         (name id) (:build-ms r)
-                         (if-let [b (:bytes r)] (format "%,.1f" (mb b)) "skipped")
-                         (if-let [b (:bytes r)]
-                           (format "%,.0f" (/ (double b) (max 1 (:sentexes r))))
-                           "—")
-                         (if (and (:bytes r) (:bytes ref) (not= id reference-id))
-                           (format "%.2fx" (/ (double (:bytes r)) (double (:bytes ref))))
-                           "—")
-                         (:note r)))))))
+        (printf "    %-18s %12s %14s %12s %10s  %s\n"
+                (name id) "shared" "shared" "shared" "—" (:note r))
+        (printf "    %-18s %12.0f %14s %12s %10s  %s\n"
+                (name id) (:build-ms r)
+                (if-let [b (:bytes r)] (format "%,.1f" (mb b)) "skipped")
+                (if-let [b (:bytes r)]
+                  (format "%,.0f" (/ (double b) (max 1 (:sentexes r))))
+                  "—")
+                (if (and (:bytes r) (:bytes ref) (not= id reference-id))
+                  (format "%.2fx" (/ (double (:bytes r)) (double (:bytes ref))))
+                  "—")
+                (:note r))))))
 
 (defn- timing-report [rows groups]
   (banner "RETRIEVAL TIME PER GOAL SHAPE")
-  (println (format "  Per-probe nanoseconds: the median of the last %d of %d timed units, each unit a"
-                   tail-units unit-reps))
+  (printf  "  Per-probe nanoseconds: the median of the last %d of %d timed units, each unit a\n"
+           tail-units unit-reps)
   (println "  fixed number of passes calibrated once on the reference layout and used unchanged")
   (println "  at every other.  A unit under the noise floor prints `noise`.  Interleaved by group,")
   (println "  so the readings a ratio compares are seconds apart rather than a whole run apart.")
@@ -567,27 +567,27 @@
   (println "  paths below are the structural half.")
   (let [ids (mapv first rows)]
     (println)
-    (println (format "    %-22s %8s %s" "shape" "probes"
-                     (str/join " " (map #(format "%16s" (name %)) ids))))
+    (printf  "    %-22s %8s %s\n" "shape" "probes"
+             (str/join " " (map #(format "%16s" (name %)) ids)))
     (println (str "    " (apply str (repeat (+ 31 (* 17 (count ids))) "-"))))
     (doseq [[gi g] (map-indexed vector groups)]
-      (println (format "    %-22s %8d %s" (:label g) (count (:pats g))
-                       (str/join " "
-                                 (map (fn [[id r]]
-                                        (let [{:keys [ns-per-probe unit-ns]} (nth (:timings r) gi)]
-                                          (format "%16s"
-                                                  (cond
-                                                    (< (double unit-ns) noise-floor-ns) "noise"
-                                                    (= id reference-id) (format "%,.0f" ns-per-probe)
-                                                    :else
-                                                    (format "%.2fx"
-                                                            (/ ns-per-probe
-                                                               (max 1.0 (:ns-per-probe
-                                                                         (nth (:timings (get (into {} rows) reference-id)) gi)))))))))
-                                      rows))))))
+      (printf "    %-22s %8d %s\n" (:label g) (count (:pats g))
+              (str/join " "
+                        (map (fn [[id r]]
+                               (let [{:keys [ns-per-probe unit-ns]} (nth (:timings r) gi)]
+                                 (format "%16s"
+                                         (cond
+                                           (< (double unit-ns) noise-floor-ns) "noise"
+                                           (= id reference-id) (format "%,.0f" ns-per-probe)
+                                           :else
+                                           (format "%.2fx"
+                                                   (/ ns-per-probe
+                                                      (max 1.0 (:ns-per-probe
+                                                                (nth (:timings (get (into {} rows) reference-id)) gi)))))))))
+                             rows)))))
   (println)
-  (println (format "    The %s column is ns per probe; every other column is a ratio against it."
-                   (name reference-id))))
+  (printf "    The %s column is ns per probe; every other column is a ratio against it.\n"
+          (name reference-id)))
 
 (defn- read-report
   "Index reads by family — and the one table where a layout without a `KvIndexStore`
@@ -600,32 +600,32 @@
   (println "  a layout whose trie is native reports n/a rather than 0 — see docs/profile.md.")
   (let [ids (mapv first rows)]
     (println)
-    (println (format "    %-18s %s" "family"
-                     (str/join " " (map #(format "%14s" (name %)) ids))))
+    (printf  "    %-18s %s\n" "family"
+             (str/join " " (map #(format "%14s" (name %)) ids)))
     (println (str "    " (apply str (repeat (+ 18 (* 15 (count ids))) "-"))))
     (doseq [f families]
-      (println (format "    %-18s %s" (name f)
-                       (str/join " " (map (fn [[_ r]]
-                                            (format "%14s"
-                                                    (if (:kv-index-store? r)
-                                                      (format "%,d" (long (get (:reads r) f 0)))
-                                                      "n/a")))
-                                          rows)))))
+      (printf "    %-18s %s\n" (name f)
+              (str/join " " (map (fn [[_ r]]
+                                   (format "%14s"
+                                           (if (:kv-index-store? r)
+                                             (format "%,d" (long (get (:reads r) f 0)))
+                                             "n/a")))
+                                 rows))))
     (println)
-    (println (format "    %-18s %s" "trie walks"
-                     (str/join " " (map (fn [[_ r]]
-                                          (format "%14s"
-                                                  (if (:kv-index-store? r)
-                                                    (format "%,d" (:calls (:fan r)))
-                                                    "n/a")))
-                                        rows))))
-    (println (format "    %-18s %s" "node probes"
-                     (str/join " " (map (fn [[_ r]]
-                                          (format "%14s"
-                                                  (if (:kv-index-store? r)
-                                                    (format "%,d" (:visits (:fan r)))
-                                                    "n/a")))
-                                        rows))))
+    (printf  "    %-18s %s\n" "trie walks"
+             (str/join " " (map (fn [[_ r]]
+                                  (format "%14s"
+                                          (if (:kv-index-store? r)
+                                            (format "%,d" (:calls (:fan r)))
+                                            "n/a")))
+                                rows)))
+    (printf  "    %-18s %s\n" "node probes"
+             (str/join " " (map (fn [[_ r]]
+                                  (format "%14s"
+                                          (if (:kv-index-store? r)
+                                            (format "%,d" (:visits (:fan r)))
+                                            "n/a")))
+                                rows)))
     (println)
     (println "    n/a = a native trie with no `KvIndexStore`.  Its flat families do tally,")
     (println "    delegating to an embedded KvIndexStore, so a mixed row is the honest reading:")
@@ -657,7 +657,7 @@
   (println "  at every depth — so this arm FAILS a layout whose counts diverge and cannot rank")
   (println "  two layouts that both count correctly.")
   (println)
-  (println (format "    %-18s %-8s %-44s %10s" "layout" "lits" "q at k = 1, 2, …" "last/first"))
+  (printf  "    %-18s %-8s %-44s %10s\n" "layout" "lits" "q at k = 1, 2, …" "last/first")
   (println (str "    " (apply str (repeat 84 "-"))))
   (doseq [[i layout] (map-indexed vector layouts*)]
     (let [physical (if (= :access (:axis layout))
@@ -669,13 +669,13 @@
                    (binding [lc/*enabled* false]
                      (plan-build! kb width 300 40)
                      (plan-q-errors kb (plan-conjunction width))))]
-          (println (format "    %-18s %-8s %-44s %10s"
-                           (if (= width 2) (name (:id layout)) "")
-                           (inc (long width))
-                           (str/join "  " (map #(format "%.2f" %) qs))
-                           (if (and (seq qs) (pos? (double (first qs))))
-                             (format "%.2fx" (/ (double (last qs)) (double (first qs))))
-                             "—")))))
+          (printf "    %-18s %-8s %-44s %10s\n"
+                  (if (= width 2) (name (:id layout)) "")
+                  (inc (long width))
+                  (str/join "  " (map #(format "%.2f" %) qs))
+                  (if (and (seq qs) (pos? (double (first qs))))
+                    (format "%.2fx" (/ (double (last qs)) (double (first qs))))
+                    "—"))))
       (println))))
 
 ;; ---- the run ------------------------------------------------------------
@@ -744,9 +744,9 @@
         workload (or (second args) "shapes")
         rest*    (drop 2 args)
         corpus?  (= "corpus" mode)]
-    (println (format "vaelii bench-index — %s / %s, %d layouts, max heap %.1f GB"
-                     mode workload (count layouts)
-                     (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0)))
+    (printf "vaelii bench-index — %s / %s, %d layouts, max heap %.1f GB\n"
+            mode workload (count layouts)
+            (/ (.maxMemory (Runtime/getRuntime)) 1073741824.0))
     (when-not (#{"shapes" "heads" "local" "all"} workload)
       (println "  unknown workload; want shapes | heads | local | all")
       (System/exit 2))
@@ -786,8 +786,8 @@
       (when (empty? groups)
         (println "  no probes — this corpus has nothing the workload can ask")
         (System/exit 1))
-      (println (format "  %d probe groups, %,d probes, over %d predicates"
-                       (count groups) (reduce + 0 (map (comp count :pats) groups)) (count preds)))
+      (printf "  %d probe groups, %,d probes, over %d predicates\n"
+              (count groups) (reduce + 0 (map (comp count :pats) groups)) (count preds))
 
       (let [timings (time-groups layouts kb-of groups)
             rows    (mapv (fn [layout]

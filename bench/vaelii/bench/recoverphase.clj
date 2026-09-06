@@ -241,21 +241,21 @@
         total (reduce + (map (fn [[k _]] (double (get f k 0.0))) step-order))
         us    (fn [x] (* 1000.0 (/ (double x) n)))
         st    (:settle-stats r)]
-    (println (format "%n── recover decomposition, %,d records ──" n))
-    (println (format "%-42s %10s %9s %8s" "step" "ms" "µs/rec" "share"))
+    (printf "%n── recover decomposition, %,d records ──\n" n)
+    (printf "%-42s %10s %9s %8s\n" "step" "ms" "µs/rec" "share")
     (doseq [[k label] step-order]
       (let [x (double (get f k 0.0))]
-        (println (format "%-42s %10.1f %9.2f %7.1f%%" label x (us x) (* 100.0 (/ x total))))))
-    (println (format "%-42s %10.1f %9.2f %7.1f%%" "TOTAL (recover)" total (us total) 100.0))
-    (println (format "  rebuild-tms subtotal            %10.1f ms   (skipped justifications: %,d)"
-                     (double (:rebuild-tms r)) (long (:skipped (:split r)))))
-    (println (format "  sub-Q B — closing settle: %d passes over %d settle iteration(s)"
-                     (long (:passes st 0)) (long (:iterations st 0))))
+        (printf "%-42s %10.1f %9.2f %7.1f%%\n" label x (us x) (* 100.0 (/ x total)))))
+    (printf "%-42s %10.1f %9.2f %7.1f%%\n" "TOTAL (recover)" total (us total) 100.0)
+    (printf "  rebuild-tms subtotal            %10.1f ms   (skipped justifications: %,d)\n"
+            (double (:rebuild-tms r)) (long (:skipped (:split r))))
+    (printf "  sub-Q B — closing settle: %d passes over %d settle iteration(s)\n"
+            (long (:passes st 0)) (long (:iterations st 0)))
     (when order
       (let [[h s jn] order]
-        (println (format "  sub-Q A — justifications (%,d): steps 3+4  hash %.1f ms · sorted %.1f ms  (%.2f×)"
-                         (long jn) (double h) (double s)
-                         (if (pos? s) (/ (double h) (double s)) 0.0)))))))
+        (printf "  sub-Q A — justifications (%,d): steps 3+4  hash %.1f ms · sorted %.1f ms  (%.2f×)\n"
+                (long jn) (double h) (double s)
+                (if (pos? s) (/ (double h) (double s)) 0.0))))))
 
 ;; ---- mode: decomp -------------------------------------------------------
 
@@ -270,8 +270,8 @@
         ids (vec (p/sentex-ids rec))
         mism (reduce (fn [c id] (if (= (jtms/in? (:tms a) id) (jtms/in? (:tms b) id)) c (inc c)))
                      0 ids)]
-    (println (format "  parity with core/recover: %s (%,d handles, %d disagreements)"
-                     (if (zero? mism) "OK" "MISMATCH") (count ids) (long mism)))
+    (printf "  parity with core/recover: %s (%,d handles, %d disagreements)\n"
+            (if (zero? mism) "OK" "MISMATCH") (count ids) (long mism))
     (zero? mism)))
 
 (defn- decomp-run [n]
@@ -279,17 +279,17 @@
     (try
       (let [summary (gen-disk! dir n {:chain? true :max-derivations (quot n 2)})
             recs    (:stored summary)]
-        (println (format "%n=== %,d facts requested → %,d records, %,d derived%s ==="
-                         (long n) (long recs) (long (:derived summary 0))
-                         (if (:truncated? summary) " (chain truncated)" "")))
+        (printf "%n=== %,d facts requested → %,d records, %,d derived%s ===\n"
+                (long n) (long recs) (long (:derived summary 0))
+                (if (:truncated? summary) " (chain truncated)" ""))
         (recover-parity! dir)
         (gc!)
         (let [kb          (reopen-cold dir)
               [_ ix-ms]   (timed (reindex/reindex kb))
               [r rec-ms]  (timed (timed-recover! kb))
               order       (order-probe dir)]
-          (println (format "  reindex %.0f ms · recover %.0f ms · OPEN %.0f ms"
-                           ix-ms rec-ms (+ ix-ms rec-ms)))
+          (printf "  reindex %.0f ms · recover %.0f ms · OPEN %.0f ms\n"
+                  ix-ms rec-ms (+ ix-ms rec-ms))
           (report-decomp recs r order)))
       (finally (disk/close-dir! dir) (rm-rf! dir)))))
 
@@ -307,11 +307,11 @@
             _       (gc!)
             sweep   (ms (reduce (fn [c id] (if (some? (p/get-sentex rec id)) (inc c) c))
                                 0 (p/sentex-ids rec)))]
-        (println (format "%n── fetch-fix, priced on :disk (%,d records) ──" recs))
-        (println (format "  one get-sentex per live sentex: %.1f ms  (%.3f µs/record)"
-                         (double sweep) (* 1000.0 (/ (double sweep) recs))))
-        (println (format "  ⇒ removed from the node loop at 100M: %.1f min at this per-record cost"
-                         (/ (* (/ (double sweep) recs) 100000000) 60000.0)))
+        (printf  "%n── fetch-fix, priced on :disk (%,d records) ──\n" recs)
+        (printf  "  one get-sentex per live sentex: %.1f ms  (%.3f µs/record)\n"
+                 (double sweep) (* 1000.0 (/ (double sweep) recs)))
+        (printf  "  ⇒ removed from the node loop at 100M: %.1f min at this per-record cost\n"
+                 (/ (* (/ (double sweep) recs) 100000000) 60000.0))
         (println "  (the enumerator already proved the handle live; the loop no longer re-reads it)"))
       (finally (disk/close-dir! dir) (rm-rf! dir)))))
 
@@ -347,11 +347,11 @@
 ;; rebuild-tms → rebuild-taxonomy (no settle), then read the genl relation's context census.
 
 (defn- taxstats-run [^String dir]
-  (println (format "%n=== genl context census: %s ===" dir))
+  (printf "%n=== genl context census: %s ===\n" dir)
   (let [kb (v/open-kb {:records :disk :index :columnar :dir dir :recover? false})]
-    (println (format "  [%s] reindex…" (now-str)))
+    (printf "  [%s] reindex…\n" (now-str))
     (reindex/reindex kb)
-    (println (format "  [%s] rebuild-tms + rebuild-taxonomy…" (now-str)))
+    (printf "  [%s] rebuild-tms + rebuild-taxonomy…\n" (now-str))
     (rebuild-tms-split! kb)
     (binding [tax/*defer-depths?* true]
       (special/rebuild-taxonomy kb)
@@ -365,18 +365,18 @@
           nilctx  (count (filter (fn [[_ cs]] (some nil? cs)) ectxs))
           setsz   (into (sorted-map) (frequencies (map count (vals ectxs))))
           total-c (reduce + 0 (vals ccounts))]
-      (println (format "%n  genl nodes with up-edges : %,d" (count fwd)))
-      (println (format "  total genl edges         : %,d" (long nedges)))
-      (println (format "  edge-ctxs entries        : %,d" (count ectxs)))
-      (println (format "  edges w/ a nil context   : %,d  (universal by the nil rule)" (long nilctx)))
-      (println (format "  distinct asserting ctxs  : %,d  (total edge-context incidences %,d)"
-                       (count ccounts) (long total-c)))
+      (printf  "%n  genl nodes with up-edges : %,d\n" (count fwd))
+      (printf  "  total genl edges         : %,d\n" (long nedges))
+      (printf  "  edge-ctxs entries        : %,d\n" (count ectxs))
+      (printf  "  edges w/ a nil context   : %,d  (universal by the nil rule)\n" (long nilctx))
+      (printf  "  distinct asserting ctxs  : %,d  (total edge-context incidences %,d)\n"
+               (count ccounts) (long total-c))
       (println "  top 15 contexts by genl-edge count:")
       (doseq [[c n] (take 15 (sort-by (comp - val) ccounts))]
-        (println (format "    %-34s %,10d  (%.1f%%)" (str c) (long n) (* 100.0 (/ (double n) (max 1 total-c))))))
-      (println (format "  edge context-set sizes   : %s" (pr-str setsz))))
+        (printf "    %-34s %,10d  (%.1f%%)\n" (str c) (long n) (* 100.0 (/ (double n) (max 1 total-c)))))
+      (printf "  edge context-set sizes   : %s\n" (pr-str setsz)))
     (disk/close-dir! dir)
-    (println (format "  [%s] done." (now-str)))))
+    (printf "  [%s] done.\n" (now-str))))
 
 ;; ---- mode: equality (sub-question C) ------------------------------------
 ;; `recovered-supersessions` re-enters `equiv-class` per equality edge — Σ kᵢ².  Hold the
@@ -404,17 +404,17 @@
 
 (defn- equality-run [ks]
   (let [members 6000]
-    (println (format "%n── sub-Q C — recovered-supersessions vs class size (≈%,d members held fixed) ──"
-                     members))
-    (println (format "%-8s %10s %14s %14s %12s" "k" "classes" "recov-supers ms" "refresh-sup ms" "ms/class"))
+    (printf "%n── sub-Q C — recovered-supersessions vs class size (≈%,d members held fixed) ──\n"
+            members)
+    (printf "%-8s %10s %14s %14s %12s\n" "k" "classes" "recov-supers ms" "refresh-sup ms" "ms/class")
     (doseq [k ks]
       (let [[kb nclasses] (equality-corpus! k members)]
         (gc!)
         (let [[cands rs-ms] (timed (vec (#'v/recovered-supersessions kb)))
               rf-ms         (ms (special/refresh-supersessions kb cands))]
-          (println (format "%-8d %10d %14.1f %14.1f %12.3f"
-                           (long k) (long nclasses) (double rs-ms) (double rf-ms)
-                           (/ (double rs-ms) nclasses))))
+          (printf "%-8d %10d %14.1f %14.1f %12.3f\n"
+                  (long k) (long nclasses) (double rs-ms) (double rf-ms)
+                  (/ (double rs-ms) nclasses)))
         (p/clear-records! (:records kb))
         (p/clear-index! (:index kb))))
     (println "  Σkᵢ² signature: at fixed membership, recov-supers ms rising ~linearly in k is the quadratic")))
@@ -432,16 +432,16 @@
 ;; each side's belief, so the pairs cleanup would resolve are visible.
 
 (defn- cleanup-preview-run [^String dir index-kind]
-  (println (format "%n=== cleanup preview: %s (index %s) ===" dir index-kind))
+  (printf "%n=== cleanup preview: %s (index %s) ===\n" dir index-kind)
   (let [kb  (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})
         rec (:records kb)
         tms (:tms kb)]
-    (println (format "  [%s] reindex…" (now-str)))
+    (printf "  [%s] reindex…\n" (now-str))
     (reindex/reindex kb)
-    (println (format "  [%s] recover…" (now-str)))
+    (printf "  [%s] recover…\n" (now-str))
     (binding [tax/*scoped-memo-budget* (memo-budget)]
       (timed-recover! kb))
-    (println (format "  [%s] recovered; scanning belief…" (now-str)))
+    (printf "  [%s] recovered; scanning belief…\n" (now-str))
     (let [ids       (p/sentex-ids rec)
           clashes   (deref (:clashes kb))
           pairs     (:pairs clashes)
@@ -458,24 +458,24 @@
           sen-str   (fn [id] (let [s (p/get-sentex rec id)]
                                (str (pr-str (:sentence s))
                                     (when (:context s) (str " @" (:context s))))))]
-      (println (format "%n  sentexes %,d · in %,d · OUT %,d"
-                       (count ids) (- (count ids) (count outs)) (count outs)))
-      (println (format "  clash nogood pairs: %,d · clash-side handles: %,d"
-                       (count pairs) (count clash-ids)))
-      (println (format "%n  === OUT by category (what destructive cleanup removes) ==="))
+      (printf  "%n  sentexes %,d · in %,d · OUT %,d\n"
+               (count ids) (- (count ids) (count outs)) (count outs))
+      (printf  "  clash nogood pairs: %,d · clash-side handles: %,d\n"
+               (count pairs) (count clash-ids))
+      (println "\n  === OUT by category (what destructive cleanup removes) ===")
       (doseq [cat [:clash-loser :superseded-premise :unsupported-orphan :derived-out]]
-        (println (format "    %-22s %,d" (name cat) (count (get by-cat cat [])))))
-      (println (format "%n  === clash nogoods (%,d): each side's belief ===" (count nogoods)))
+        (printf "    %-22s %,d\n" (name cat) (count (get by-cat cat []))))
+      (printf "%n  === clash nogoods (%,d): each side's belief ===\n" (count nogoods))
       (doseq [ng (take 300 (vals nogoods))]
-        (println (format "    [%s]" (name (:kind ng))))
+        (printf "    [%s]\n" (name (:kind ng)))
         (doseq [id (vec (:nogood ng))]
-          (println (format "       %-3s %s" (if (jtms/in? tms id) "IN" "OUT") (sen-str id)))))
+          (printf "       %-3s %s\n" (if (jtms/in? tms id) "IN" "OUT") (sen-str id))))
       (doseq [cat [:unsupported-orphan :superseded-premise :derived-out]]
         (let [xs (get by-cat cat [])]
-          (println (format "%n  === %s (%,d) — sample up to 40 ===" (name cat) (count xs)))
-          (doseq [id (take 40 xs)] (println (str "    " (sen-str id)))))))
-    (disk/close-dir! dir)
-    (println (format "%n  [%s] done." (now-str)))))
+          (printf "%n  === %s (%,d) — sample up to 40 ===\n" (name cat) (count xs))
+          (doseq [id (take 40 xs)] (println (str "    " (sen-str id))))))))
+  (disk/close-dir! dir)
+  (printf "%n  [%s] done.\n" (now-str)))
 
 ;; ---- mode: disjoint-audit -----------------------------------------------
 ;; Two disjointness pathologies that inflate the clash scan without ever being a
@@ -489,12 +489,12 @@
 ;; Open → reindex → rebuild-taxonomy (no settle), then read the disjoint index.
 
 (defn- disjoint-audit-run [^String dir]
-  (println (format "%n=== disjoint audit: %s ===" dir))
+  (printf "%n=== disjoint audit: %s ===\n" dir)
   (let [kb  (v/open-kb {:records :disk :index :columnar :dir dir :recover? false})
         tax (:taxonomy kb)]
-    (println (format "  [%s] reindex…" (now-str)))
+    (printf "  [%s] reindex…\n" (now-str))
     (reindex/reindex kb)
-    (println (format "  [%s] rebuild-tms + rebuild-taxonomy…" (now-str)))
+    (printf "  [%s] rebuild-tms + rebuild-taxonomy…\n" (now-str))
     (rebuild-tms-split! kb)
     (binding [tax/*defer-depths?* true]
       (special/rebuild-taxonomy kb)
@@ -514,20 +514,20 @@
                                                     (contains? (tax/genls-global tax s) t))
                                             [t s]))))))
                         types)]
-      (println (format "%n  disjoint-declared types      : %,d" (count types)))
-      (println (format "  disjoint-index incidences    : %,d" (reduce + 0 (map (comp count val) didx))))
-      (println (format "  self-disjoint (T disjoint T) : %,d" (count self-ts)))
-      (println (format "  subsumption-contradictory    : %,d  (T disjoint S with T⊑S or S⊑T)" (count subcon)))
+      (printf "%n  disjoint-declared types      : %,d\n" (count types))
+      (printf "  disjoint-index incidences    : %,d\n" (reduce + 0 (map (comp count val) didx)))
+      (printf "  self-disjoint (T disjoint T) : %,d\n" (count self-ts))
+      (printf "  subsumption-contradictory    : %,d  (T disjoint S with T⊑S or S⊑T)\n" (count subcon))
       (when (seq self-ts)
-        (println (format "%n  === self-disjoint types — each de-optimizes the scan for its down-closure ==="))
+        (println "\n  === self-disjoint types — each de-optimizes the scan for its down-closure ===")
         (doseq [t (take 80 (sort-by (fn [t] (- (count (tax/specs-global tax t)))) self-ts))]
-          (println (format "    %-42s down-closure(subtypes): %,d" (str t) (long (count (tax/specs-global tax t)))))))
+          (printf "    %-42s down-closure(subtypes): %,d\n" (str t) (long (count (tax/specs-global tax t))))))
       (when (seq subcon)
-        (println (format "%n  === subsumption-contradictory pairs (sample 60) ==="))
+        (println "\n  === subsumption-contradictory pairs (sample 60) ===")
         (doseq [[t s] (take 60 subcon)]
-          (println (format "    %-36s  disjoint  %s" (str t) (str s))))))
+          (printf "    %-36s  disjoint  %s\n" (str t) (str s)))))
     (disk/close-dir! dir)
-    (println (format "%n  [%s] done." (now-str)))))
+    (printf "%n  [%s] done.\n" (now-str))))
 
 ;; ---- mode: snapshot-verify ----------------------------------------------
 ;; Prove the belief certificate end to end on the real corpus:
@@ -588,12 +588,12 @@
             (p/sentexes-with-arg (:index kb) 1 a1)))))
 
 (defn- snapshot-verify-run [^String dir index-kind]
-  (println (format "%n=== snapshot verify: %s (index %s) ===" dir index-kind))
+  (printf "%n=== snapshot verify: %s (index %s) ===\n" dir index-kind)
   (let [f-comp (str dir "/belief-complete.edn")
         f-min  (str dir "/belief-minimal.edn")
         out0
         (let [kb (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
-          (println (format "  [%s] reindex + full recover…" (now-str)))
+          (printf "  [%s] reindex + full recover…\n" (now-str))
           (reindex/reindex kb)
           ;; the full/fast A/B holds the budget fixed on both sides, so it reads the
           ;; default rather than the property — the comparison is of recover strategies
@@ -605,37 +605,37 @@
                 complete {:out (vec out0) :notes notes}]
             (spit-edn f-min minimal true)
             (spit-edn f-comp complete false)
-            (println (format "  OUT %,d · clash pairs %,d · notes captured %,d"
-                             (count out0) (count (:pairs clashes)) (count notes)))
-            (println (format "  :minimal.edn = %,d bytes · :complete.edn = %,d bytes"
-                             (.length (io/file f-min)) (.length (io/file f-comp))))
-            (println (format "  EDN round-trip lossless?  :minimal %s · :complete %s"
-                             (= minimal  (edn/read-string (slurp f-min)))
-                             (= complete (edn/read-string (slurp f-comp)))))
+            (printf "  OUT %,d · clash pairs %,d · notes captured %,d\n"
+                    (count out0) (count (:pairs clashes)) (count notes))
+            (printf "  :minimal.edn = %,d bytes · :complete.edn = %,d bytes\n"
+                    (.length (io/file f-min)) (.length (io/file f-comp)))
+            (printf "  EDN round-trip lossless?  :minimal %s · :complete %s\n"
+                    (= minimal  (edn/read-string (slurp f-min)))
+                    (= complete (edn/read-string (slurp f-comp))))
             (disk/close-dir! dir)
             out0))]
-    (println (format "%n  [%s] fast reload — recover with the disjointness scan SKIPPED…" (now-str)))
+    (printf "%n  [%s] fast reload — recover with the disjointness scan SKIPPED…\n" (now-str))
     (let [kb2 (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
       (reindex/reindex kb2)
       (let [[_ fast-ms] (timed (binding [tax/*scoped-memo-budget*        default-memo-budget
                                          settle/*skip-constraint-nogoods* true]
                                  (timed-recover! kb2)))
             out1 (capture-belief kb2)]
-        (println (format "  fast recover %.0f ms (%.2f min) — clashes now %,d"
-                         (double fast-ms) (/ (double fast-ms) 60000.0)
-                         (count (:pairs (deref (:clashes kb2))))))
-        (println (format "  belief reproduced WITHOUT the scan? %s   (fast OUT %,d vs full OUT %,d)"
-                         (= out0 out1) (count out1) (count out0)))
+        (printf "  fast recover %.0f ms (%.2f min) — clashes now %,d\n"
+                (double fast-ms) (/ (double fast-ms) 60000.0)
+                (count (:pairs (deref (:clashes kb2)))))
+        (printf "  belief reproduced WITHOUT the scan? %s   (fast OUT %,d vs full OUT %,d)\n"
+                (= out0 out1) (count out1) (count out0))
         (when (not= out0 out1)
-          (println (format "    only in full recover: %s" (vec (take 8 (set/difference out0 out1)))))
-          (println (format "    only in fast reload : %s" (vec (take 8 (set/difference out1 out0))))))
+          (printf "    only in full recover: %s\n" (vec (take 8 (set/difference out0 out1))))
+          (printf "    only in fast reload : %s\n" (vec (take 8 (set/difference out1 out0)))))
         (disk/close-dir! dir)))
     ;; --- pass 3: read-only WARM reload — rebuild-tms + taxonomy (the ~5-min floor),
     ;; then force belief from the :minimal.edn certificate, running NO settle.  This is
     ;; the aggressive path the tiny file is for: labels are forced (exception mechanisms
     ;; are not reinstalled, so it is read-only), and the whole clash + exception
     ;; derivation is skipped.
-    (println (format "%n  [%s] warm reload — structural rebuild only, then force belief from EDN…" (now-str)))
+    (printf "%n  [%s] warm reload — structural rebuild only, then force belief from EDN…\n" (now-str))
     ;; `:tms :reference` on purpose: this pass forces the OUT set by poking the TMS state
     ;; atom directly (`.-state` below), which only the atom-backed `RefTms` carries — the
     ;; default `:dense` TMS has no such field, so on it the force step throws.
@@ -647,37 +647,37 @@
                          (special/rebuild-taxonomy kb3)
                          (tax/refresh-beliefs (:taxonomy kb3) #(jtms/in? (:tms kb3) %)))
                        (tax/restore-depths (:taxonomy kb3))))]
-        (println (format "  structural rebuild (no settle) %.0f ms (%.2f min) — natural OUT %,d"
-                         (double rebuild-ms) (/ (double rebuild-ms) 60000.0) (count (capture-belief kb3))))
+        (printf "  structural rebuild (no settle) %.0f ms (%.2f min) — natural OUT %,d\n"
+                (double rebuild-ms) (/ (double rebuild-ms) 60000.0) (count (capture-belief kb3)))
         (try
           (let [want (:out (edn/read-string (slurp f-min)))
                 [ids force-ms] (timed (into [] (keep #(resolve-id kb3 %)) want))
                 st   (.-state ^vaelii.impl.jtms.RefTms (:tms kb3))]
             (swap! st update :in (fn [in] (reduce disj in ids)))
             (let [out3 (capture-belief kb3)]
-              (println (format "  resolved %,d / %,d handles in %.0f ms; forced OUT"
-                               (count ids) (count want) (double force-ms)))
-              (println (format "  belief matches full recover? %s   (warm OUT %,d vs full OUT %,d)"
-                               (= out0 out3) (count out3) (count out0)))
+              (printf "  resolved %,d / %,d handles in %.0f ms; forced OUT\n"
+                      (count ids) (count want) (double force-ms))
+              (printf "  belief matches full recover? %s   (warm OUT %,d vs full OUT %,d)\n"
+                      (= out0 out3) (count out3) (count out0))
               (when (not= out0 out3)
-                (println (format "    only in full: %s" (vec (take 6 (set/difference out0 out3)))))
-                (println (format "    only in warm: %s" (vec (take 6 (set/difference out3 out0))))))))
+                (printf "    only in full: %s\n" (vec (take 6 (set/difference out0 out3))))
+                (printf "    only in warm: %s\n" (vec (take 6 (set/difference out3 out0)))))))
           (catch Throwable t
-            (println (format "  force-belief step FAILED: %s" (.getMessage t)))))
+            (printf "  force-belief step FAILED: %s\n" (.getMessage t))))
         (disk/close-dir! dir))))
-  (println (format "%n  [%s] done." (now-str))))
+  (printf "%n  [%s] done.\n" (now-str)))
 
 (defn- show-belief-run [^String npy]
   (let [data (nippy/thaw-from-file npy)
         out  (:out data)
         edn  (str npy ".edn")]
-    (println (format "%n=== belief certificate: %s ===" npy))
-    (println (format "  OUT entries: %,d" (count out)))
+    (printf "%n=== belief certificate: %s ===\n" npy)
+    (printf "  OUT entries: %,d\n" (count out))
     (spit-edn edn {:out (vec (sort-by pr-str out))} true)
-    (println (format "  wrote human-readable EDN: %s (%,d bytes)" edn (.length (io/file edn))))
+    (printf "  wrote human-readable EDN: %s (%,d bytes)\n" edn (.length (io/file edn)))
     (println "  --- disbelieved sentexes (first 30, sorted) ---")
     (doseq [[sen ctx] (take 30 (sort-by pr-str out))]
-      (println (format "    %s  @%s" (pr-str sen) ctx)))))
+      (printf "    %s  @%s\n" (pr-str sen) ctx))))
 
 ;; ---- mode: beliefcert ---------------------------------------------------
 ;; The belief certificate end to end against the real store, through the *production*
@@ -698,55 +698,55 @@
 
 (defn- beliefcert-run [^String dir index-kind]
   (System/setProperty "vaelii.belief.snapshot" "true")
-  (println (format "%n=== belief certificate: %s (index %s) ===" dir index-kind))
+  (printf "%n=== belief certificate: %s (index %s) ===\n" dir index-kind)
   (binding [tax/*scoped-memo-budget* (memo-budget)]
     ;; ---- PASS 1: mint (a full recover writes the certificate) ----
-    (println (format "  [%s] PASS 1 mint — open cold" (now-str)))
+    (printf "  [%s] PASS 1 mint — open cold\n" (now-str))
     (let [kb1   (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})
           nsent (count (p/sentex-ids (:records kb1)))]
-      (println (format "  records: %,d sentexes" (long nsent)))
-      (println (format "  usable? before mint: %s (expect false — no certificate yet)"
-                       (bs/usable? (:records kb1))))
+      (printf "  records: %,d sentexes\n" (long nsent))
+      (printf "  usable? before mint: %s (expect false — no certificate yet)\n"
+              (bs/usable? (:records kb1)))
       (gc!)
       (let [[_ ix1] (timed (reindex/reindex kb1))]
-        (println (format "  reindex %.2f min — %s" (/ ix1 60000.0) (heap-str)))
+        (printf "  reindex %.2f min — %s\n" (/ ix1 60000.0) (heap-str))
         (gc!)
-        (println (format "  [%s] recover (full, mints certificate)…" (now-str)))
+        (printf "  [%s] recover (full, mints certificate)…\n" (now-str))
         (let [[_ rc1]   (timed (v/recover kb1))
               [in1 out1] (belief-census kb1)
               cp1       (clash-pairs kb1)
               meta      (bs/read-meta (:records kb1))]
-          (println (format "  MINT  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s"
-                           (/ rc1 60000.0) (long cp1) (long in1) (long out1) (heap-str)))
-          (println (format "  certificate: clean? %s · out-count %,d · clash-count %,d · clash-losers %,d"
-                           (:clean? meta) (long (:out-count meta)) (long (:clash-count meta))
-                           (long (:clash-losers meta))))
+          (printf "  MINT  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s\n"
+                  (/ rc1 60000.0) (long cp1) (long in1) (long out1) (heap-str))
+          (printf "  certificate: clean? %s · out-count %,d · clash-count %,d · clash-losers %,d\n"
+                  (:clean? meta) (long (:out-count meta)) (long (:clash-count meta))
+                  (long (:clash-losers meta)))
           (disk/close-dir! dir)
           (gc!)
           ;; ---- PASS 2: fast (the certificate skips the clash scan) ----
-          (println (format "%n  [%s] PASS 2 fast — reopen cold" (now-str)))
+          (printf "%n  [%s] PASS 2 fast — reopen cold\n" (now-str))
           (let [kb2 (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
-            (println (format "  usable? %s (expect true — clean stamp matches records)"
-                             (bs/usable? (:records kb2))))
+            (printf "  usable? %s (expect true — clean stamp matches records)\n"
+                    (bs/usable? (:records kb2)))
             (let [[_ ix2] (timed (reindex/reindex kb2))]
-              (println (format "  reindex %.2f min — %s" (/ ix2 60000.0) (heap-str)))
+              (printf "  reindex %.2f min — %s\n" (/ ix2 60000.0) (heap-str))
               (gc!)
-              (println (format "  [%s] recover (fast, certificate skips the scan)…" (now-str)))
+              (printf "  [%s] recover (fast, certificate skips the scan)…\n" (now-str))
               (let [[_ rc2]   (timed (v/recover kb2))
                     [in2 out2] (belief-census kb2)
                     cp2       (clash-pairs kb2)]
-                (println (format "  FAST  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s"
-                                 (/ rc2 60000.0) (long cp2) (long in2) (long out2) (heap-str)))
+                (printf "  FAST  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s\n"
+                        (/ rc2 60000.0) (long cp2) (long in2) (long out2) (heap-str))
                 (disk/close-dir! dir)
                 (println "\n  === VERDICT ===")
-                (println (format "  belief identical: %s   (in %,d==%,d · out %,d==%,d)"
-                                 (= [in1 out1] [in2 out2])
-                                 (long in1) (long in2) (long out1) (long out2)))
-                (println (format "  recover  full %.2f min → fast %.2f min   (%.2f min saved, %.1f%%)"
-                                 (/ rc1 60000.0) (/ rc2 60000.0) (/ (- rc1 rc2) 60000.0)
-                                 (if (pos? rc1) (* 100.0 (/ (- rc1 rc2) rc1)) 0.0)))
-                (println (format "  clash records: full %,d → fast %,d (the fast path rederives none)"
-                                 (long cp1) (long cp2)))))))))))
+                (printf "  belief identical: %s   (in %,d==%,d · out %,d==%,d)\n"
+                        (= [in1 out1] [in2 out2])
+                        (long in1) (long in2) (long out1) (long out2))
+                (printf "  recover  full %.2f min → fast %.2f min   (%.2f min saved, %.1f%%)\n"
+                        (/ rc1 60000.0) (/ rc2 60000.0) (/ (- rc1 rc2) 60000.0)
+                        (if (pos? rc1) (* 100.0 (/ (- rc1 rc2) rc1)) 0.0))
+                (printf "  clash records: full %,d → fast %,d (the fast path rederives none)\n"
+                        (long cp1) (long cp2))))))))))
 
 (defn- default-corpus
   "The corpus directory the store-reading modes default to when given no path.
@@ -762,7 +762,7 @@
 
 (defn -main [& args]
   (let [mode (or (first args) "decomp")]
-    (println (format "recover-phase decomposition — %s" mode))
+    (printf "recover-phase decomposition — %s\n" mode)
     (case mode
       "decomp"   (let [sizes (if (next args)
                                (map parse-long (rest args))

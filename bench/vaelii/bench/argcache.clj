@@ -51,22 +51,22 @@
     (println "building macro corpus…")
     (build! kb opts)
     (reindex/reindex kb)
-    (println (format "built %,d sentexes\n" (long (v/sentex-count kb))))
+    (printf "built %,d sentexes\n\n" (long (v/sentex-count kb)))
     ;; warm the JIT / settle once, discard
     (v/recover kb)
     (let [off1 (time-recover kb false)
           on   (time-recover kb true)
           off2 (time-recover kb false)]
       (println "  -- recover, three ways (same settled KB) --")
-      (println (format "  cache-off     %6.3f s  | %,d contradictions  | %,.0f MB"
-                       (:s off1) (long (:contradictions off1)) (/ (:bytes off1) 1048576.0)))
-      (println (format "  cache-ON      %6.3f s  | %,d contradictions  | %,.0f MB"
-                       (:s on) (long (:contradictions on)) (/ (:bytes on) 1048576.0)))
-      (println (format "  cache-off(2)  %6.3f s  | %,d contradictions  | %,.0f MB"
-                       (:s off2) (long (:contradictions off2)) (/ (:bytes off2) 1048576.0)))
-      (println (format "\n  sweep-bypass = cache-off (the sweep leaves the memo nil): %6.3f s" (:s off2)))
+      (printf  "  cache-off     %6.3f s  | %,d contradictions  | %,.0f MB\n"
+               (:s off1) (long (:contradictions off1)) (/ (:bytes off1) 1048576.0))
+      (printf  "  cache-ON      %6.3f s  | %,d contradictions  | %,.0f MB\n"
+               (:s on) (long (:contradictions on)) (/ (:bytes on) 1048576.0))
+      (printf  "  cache-off(2)  %6.3f s  | %,d contradictions  | %,.0f MB\n"
+               (:s off2) (long (:contradictions off2)) (/ (:bytes off2) 1048576.0))
+      (printf  "\n  sweep-bypass = cache-off (the sweep leaves the memo nil): %6.3f s\n" (:s off2))
       (let [best-off (min (:s off1) (:s off2))]
-        (println (format "  memo delta on the sweep: %+.1f%% (cache-on vs best cache-off)"
-                         (* 100.0 (/ (- (:s on) best-off) best-off)))))))
+        (printf "  memo delta on the sweep: %+.1f%% (cache-on vs best cache-off)\n"
+                (* 100.0 (/ (- (:s on) best-off) best-off))))))
   (shutdown-agents)
   (System/exit 0))

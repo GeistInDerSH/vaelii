@@ -44,20 +44,20 @@
             (timed (gen/load-into kb {:facts facts :rules rules :individuals (max 100 (quot facts 5))
                                       :types 200 :predicates 40 :chain? false}))
             n  (count (p/sentex-ids (:records kb)))]
-        (println (format "generated %,d records (%,d facts, %,d rules requested, %,d derived) in %.1f s"
-                         n (long facts) (long rules) (long (:derived summary 0)) (/ load-ms 1000.0)))
+        (printf "generated %,d records (%,d facts, %,d rules requested, %,d derived) in %.1f s\n"
+                n (long facts) (long rules) (long (:derived summary 0)) (/ load-ms 1000.0))
         ;; the open path, in its two halves — exactly what `{:recover? :auto}` runs
         (let [[res ix-ms]  (timed (reindex/reindex kb))
               [_   rec-ms] (timed (v/recover kb))
               total        (+ ix-ms rec-ms)]
-          (println (format "\nindex backend %s, tms %s, %,d records" index-kind tms-kind n))
-          (println (format "  reindex  %8.0f ms   (%,d sentexes, %,d rules)  %,.0f records/s"
-                           ix-ms (long (:sentexes res)) (long (:rules res))
-                           (/ n (/ ix-ms 1000.0))))
-          (println (format "  recover  %8.0f ms" rec-ms))
-          (println (format "  OPEN     %8.0f ms   → %,.0f records/s   ⇒ %.1f min at 100M"
-                           total (/ n (/ total 1000.0))
-                           (/ (* (/ total n) 100000000) 60000.0)))))
+          (printf "\nindex backend %s, tms %s, %,d records\n" index-kind tms-kind n)
+          (printf "  reindex  %8.0f ms   (%,d sentexes, %,d rules)  %,.0f records/s\n"
+                  ix-ms (long (:sentexes res)) (long (:rules res))
+                  (/ n (/ ix-ms 1000.0)))
+          (printf "  recover  %8.0f ms\n" rec-ms)
+          (printf "  OPEN     %8.0f ms   → %,.0f records/s   ⇒ %.1f min at 100M\n"
+                  total (/ n (/ total 1000.0))
+                  (/ (* (/ total n) 100000000) 60000.0))))
       (finally (disk/close-dir! dir) (rm-rf! dir)))))
 
 (defn -main [& args]

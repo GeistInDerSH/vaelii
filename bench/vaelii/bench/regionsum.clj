@@ -121,28 +121,28 @@
   (let [h (region-probe dir seq)
         _ (gc!)
         s (region-probe dir sort)]
-    (println (format "  justifications added: %,d  (skipped unrooted: %,d)"
-                     (long (:adds h)) (long (:skipped h))))
-    (println (format "%-8s %16s %10s %12s %12s %12s"
-                     "order" "Σ|R_j|" "Σ/M" "singletons" "max|R_j|" "loop ms*"))
+    (printf "  justifications added: %,d  (skipped unrooted: %,d)\n"
+            (long (:adds h)) (long (:skipped h)))
+    (printf "%-8s %16s %10s %12s %12s %12s\n"
+            "order" "Σ|R_j|" "Σ/M" "singletons" "max|R_j|" "loop ms*")
     (doseq [[label r] [["hash" h] ["sorted" s]]]
-      (println (format "%-8s %16d %10.3f %11d%% %12d %12.1f"
-                       label (long (:sum r))
-                       (/ (double (:sum r)) (max 1.0 (double (:adds r))))
-                       (long (Math/round (* 100.0 (/ (double (:singletons r))
-                                                     (max 1.0 (double (:adds r)))))))
-                       (long (:maxregion r)) (double (:ms r)))))
-    (println (format "  hash/sorted Σ|R_j|: %.2f×  (>1 ⇒ id order collapses region work — [08] item 2)"
-                     (/ (double (:sum h)) (max 1.0 (double (:sum s))))))
+      (printf "%-8s %16d %10.3f %11d%% %12d %12.1f\n"
+              label (long (:sum r))
+              (/ (double (:sum r)) (max 1.0 (double (:adds r))))
+              (long (Math/round (* 100.0 (/ (double (:singletons r))
+                                            (max 1.0 (double (:adds r)))))))
+              (long (:maxregion r)) (double (:ms r))))
+    (printf  "  hash/sorted Σ|R_j|: %.2f×  (>1 ⇒ id order collapses region work — [08] item 2)\n"
+             (/ (double (:sum h)) (max 1.0 (double (:sum s)))))
     (println "  * loop ms carries a reset-touched! per add (measurement overhead); the decider is Σ/M, not ms")))
 
 (defn- run-size [n]
   (let [dir (tmpdir)]
     (try
       (let [summary (gen-disk! dir n)]
-        (println (format "%n=== %,d facts → %,d records, %,d derived%s ==="
-                         (long n) (long (:stored summary)) (long (:derived summary 0))
-                         (if (:truncated? summary) " (chain truncated)" "")))
+        (printf "%n=== %,d facts → %,d records, %,d derived%s ===\n"
+                (long n) (long (:stored summary)) (long (:derived summary 0))
+                (if (:truncated? summary) " (chain truncated)" ""))
         (report-orders dir))
       (finally (disk/close-dir! dir) (rm-rf! dir)))))
 
@@ -157,7 +157,7 @@
   (let [kb   (reopen-cold dir)
         recs (count (p/sentex-ids (:records kb)))]
     (disk/close-dir! dir)
-    (println (format "%n=== real KB at %s → %,d records ===" dir (long recs)))
+    (printf "%n=== real KB at %s → %,d records ===\n" dir (long recs))
     (report-orders dir)))
 
 ;; ---- main ---------------------------------------------------------------

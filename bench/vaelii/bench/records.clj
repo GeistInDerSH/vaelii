@@ -107,29 +107,29 @@
         var-b    (frozen-bytes varint)
         dict-ram (postings/retained [dict])]
     (println "\n══ Phase 4.1: record frozen bytes — symbols vs int-id bodies ══")
-    (println (format "  %-34s %10s %10s %8s" "frozen form" "MB" "B/record" "shrink"))
+    (printf  "  %-34s %10s %10s %8s\n" "frozen form" "MB" "B/record" "shrink")
     (println (str "  " (apply str (repeat 66 \-))))
-    (println (format "  %-34s %10.1f %10.1f %8s" "as-is (symbol names per frame)"
-                     (mb as-is) (/ (double as-is) n) "—"))
-    (println (format "  %-34s %10.1f %10.1f %7.2f×" "int[] prefix encoding"
-                     (mb int-b) (/ (double int-b) n) (/ (double as-is) int-b)))
-    (println (format "  %-34s %10.1f %10.1f %7.2f×" "varint byte[] encoding"
-                     (mb var-b) (/ (double var-b) n) (/ (double as-is) var-b)))
-    (println (format "  dictionary: %,d tokens, %.1f MB RAM (the durable ground truth the ids decode through)"
-                     (tok/token-count dict) (mb dict-ram)))
+    (printf  "  %-34s %10.1f %10.1f %8s\n" "as-is (symbol names per frame)"
+             (mb as-is) (/ (double as-is) n) "—")
+    (printf  "  %-34s %10.1f %10.1f %7.2f×\n" "int[] prefix encoding"
+             (mb int-b) (/ (double int-b) n) (/ (double as-is) int-b))
+    (printf  "  %-34s %10.1f %10.1f %7.2f×\n" "varint byte[] encoding"
+             (mb var-b) (/ (double var-b) n) (/ (double as-is) var-b))
+    (printf  "  dictionary: %,d tokens, %.1f MB RAM (the durable ground truth the ids decode through)\n"
+             (tok/token-count dict) (mb dict-ram))
     ;; attribution: a nippy frame spends bytes on the record's *scaffolding* (the record
     ;; type tag and every field name, per frame) as well as on the sentence.  Only the
     ;; second is what an int-id body can shrink, so measure the split before believing
     ;; any body encoding can move the total.
     (let [gutted (mapv #(reduce (fn [r k] (if (contains? r k) (assoc r k nil) r)) % body-keys) recs)
           scaf   (frozen-bytes gutted)]
-      (println (format "  ─ of which scaffolding (record tag + field names, per frame): %.1f MB (%.0f B/record, %.0f%%)"
-                       (mb scaf) (/ (double scaf) n) (* 100.0 (/ (double scaf) as-is))))
-      (println (format "  ─ of which the s-expression bodies:                          %.1f MB (%.0f B/record, %.0f%%)"
-                       (mb (- as-is scaf)) (/ (double (- as-is scaf)) n)
-                       (* 100.0 (/ (double (- as-is scaf)) as-is))))
-      (println (format "  → a body encoding can only address the second: best case %.1f MB → %.1f MB (%.2f×)"
-                       (mb as-is) (mb (+ scaf (- var-b scaf))) (/ (double as-is) var-b))))
+      (printf "  ─ of which scaffolding (record tag + field names, per frame): %.1f MB (%.0f B/record, %.0f%%)\n"
+              (mb scaf) (/ (double scaf) n) (* 100.0 (/ (double scaf) as-is)))
+      (printf "  ─ of which the s-expression bodies:                          %.1f MB (%.0f B/record, %.0f%%)\n"
+              (mb (- as-is scaf)) (/ (double (- as-is scaf)) n)
+              (* 100.0 (/ (double (- as-is scaf)) as-is)))
+      (printf "  → a body encoding can only address the second: best case %.1f MB → %.1f MB (%.2f×)\n"
+              (mb as-is) (mb (+ scaf (- var-b scaf))) (/ (double as-is) var-b)))
     {:as-is as-is :int int-b :varint var-b :dict-tokens (tok/token-count dict)}))
 
 (defn- measure-fetch-attribution
@@ -152,10 +152,10 @@
         t-full (t #(doseq [id probe] (p/get-sentex store id)))
         us    (fn [x] (* 1000.0 (/ (double x) n)))]
     (println "\n══ Phase 4.2b: where a warm fetch's time goes (µs/record) ══")
-    (println (format "  slot read (one positional read of 24 B)  %6.2f µs  %4.0f%%" (us t-slot) (* 100.0 (/ t-slot t-full))))
-    (println (format "  frame read + thaw (one sized read)       %6.2f µs  %4.0f%%" (us t-read) (* 100.0 (/ t-read t-full))))
-    (println (format "  ─ of which nippy thaw                    %6.2f µs  %4.0f%%" (us t-thaw) (* 100.0 (/ t-thaw t-full))))
-    (println (format "  ── full get-sentex                       %6.2f µs" (us t-full)))
+    (printf  "  slot read (one positional read of 24 B)  %6.2f µs  %4.0f%%\n" (us t-slot) (* 100.0 (/ t-slot t-full)))
+    (printf  "  frame read + thaw (one sized read)       %6.2f µs  %4.0f%%\n" (us t-read) (* 100.0 (/ t-read t-full)))
+    (printf  "  ─ of which nippy thaw                    %6.2f µs  %4.0f%%\n" (us t-thaw) (* 100.0 (/ t-thaw t-full)))
+    (printf  "  ── full get-sentex                       %6.2f µs\n" (us t-full))
     (println "  batching can amortize the reads only; a hot cache skips all of it.")
     ;; --- the slot-read shapes, measured against each other -----------------
     ;; A slot read is 24 bytes, and how it is spelled dominates a warm fetch.  These
@@ -182,10 +182,10 @@
                          (let [len (+ 4 (long (:length s)))
                                fb  (java.nio.ByteBuffer/allocate len)]
                            (.read lch fb (long (:offset s))))))]
-      (println (format "  ── slot via one readFully(24)            %6.2f µs" (us t-1sys)))
-      (println (format "  ── slot via positional channel read      %6.2f µs   (what shipped)" (us t-pos)))
-      (println (format "  ── frame payload via one positional read %6.2f µs   (what shipped, minus the thaw)"
-                       (us t-frame1))))))
+      (printf "  ── slot via one readFully(24)            %6.2f µs\n" (us t-1sys))
+      (printf "  ── slot via positional channel read      %6.2f µs   (what shipped)\n" (us t-pos))
+      (printf "  ── frame payload via one positional read %6.2f µs   (what shipped, minus the thaw)\n"
+              (us t-frame1)))))
 
 (defn- measure-frame-codec
   "The other half of the frozen-byte question the attribution raises: 56%% of a frame is
@@ -210,12 +210,12 @@
                     posv)
         both-b (frozen-bytes both)]
     (println "\n══ Phase 4.1b: the frame's scaffolding — a positional codec ══")
-    (println (format "  %-38s %8.1f MB %8.1f B/rec %7s" "record frames (type tag + field names)"
-                     (mb as-is) (/ (double as-is) n) "—"))
-    (println (format "  %-38s %8.1f MB %8.1f B/rec %6.2f×" "positional frames (fields by position)"
-                     (mb pos-b) (/ (double pos-b) n) (/ (double as-is) pos-b)))
-    (println (format "  %-38s %8.1f MB %8.1f B/rec %6.2f×" "positional + varint int-id bodies"
-                     (mb both-b) (/ (double both-b) n) (/ (double as-is) both-b)))
+    (printf  "  %-38s %8.1f MB %8.1f B/rec %7s\n" "record frames (type tag + field names)"
+             (mb as-is) (/ (double as-is) n) "—")
+    (printf  "  %-38s %8.1f MB %8.1f B/rec %6.2f×\n" "positional frames (fields by position)"
+             (mb pos-b) (/ (double pos-b) n) (/ (double as-is) pos-b))
+    (printf  "  %-38s %8.1f MB %8.1f B/rec %6.2f×\n" "positional + varint int-id bodies"
+             (mb both-b) (/ (double both-b) n) (/ (double as-is) both-b))
     (println "  the positional half needs no dictionary and no decode step; the body half needs both.")))
 
 ;; ---- fetch cost ---------------------------------------------------------
@@ -281,10 +281,10 @@
         log-b (files/log-length (:log (:sentexes (:kinds store))))
         raw-b (+ (long (:as-is frozen)) (* 4 (count recs)))]  ; the record frames + prefixes
     (println "\n══ Phase 4.1c: the sentexes log as written ══")
-    (println (format "  record frames would be   %8.1f MB (%.1f B/record, incl. the 4-byte prefix)"
-                     (mb raw-b) (/ (double raw-b) (count recs))))
-    (println (format "  positional frames are    %8.1f MB (%.1f B/record)   %.2f×"
-                     (mb log-b) (/ (double log-b) (count recs)) (/ (double raw-b) log-b)))
+    (printf  "  record frames would be   %8.1f MB (%.1f B/record, incl. the 4-byte prefix)\n"
+             (mb raw-b) (/ (double raw-b) (count recs)))
+    (printf  "  positional frames are    %8.1f MB (%.1f B/record)   %.2f×\n"
+             (mb log-b) (/ (double log-b) (count recs)) (/ (double raw-b) log-b))
     (let [rng   (java.util.Random. 20260724)
           k     (min 100000 (count ids))
           ;; uniform draw — the cold-ish case (no locality to exploit)
@@ -298,12 +298,12 @@
             [p2 _]  (fetch-per-handle store zipf)
             [b2 _]  (fetch-batched    store zipf)]
         (println "\n══ Phase 4.2: disk record fetch — per-handle vs batched ══")
-        (println (format "  %,d fetches over %,d records (page cache warm)" k (count ids)))
-        (println (format "  %-28s %10s %12s %8s" "access pattern" "per-handle" "batched(64)" "speedup"))
+        (printf  "  %,d fetches over %,d records (page cache warm)\n" k (count ids))
+        (printf  "  %-28s %10s %12s %8s\n" "access pattern" "per-handle" "batched(64)" "speedup")
         (println (str "  " (apply str (repeat 62 \-))))
-        (println (format "  %-28s %8.0f ms %10.0f ms %7.2f×" "uniform" p1 b1 (/ p1 b1)))
-        (println (format "  %-28s %8.0f ms %10.0f ms %7.2f×" "zipfian (s=1.1)" p2 b2 (/ p2 b2)))
-        (println (format "  (%,d / %,d records found — parity check)" n1 n2))
+        (printf  "  %-28s %8.0f ms %10.0f ms %7.2f×\n" "uniform" p1 b1 (/ p1 b1))
+        (printf  "  %-28s %8.0f ms %10.0f ms %7.2f×\n" "zipfian (s=1.1)" p2 b2 (/ p2 b2))
+        (printf  "  (%,d / %,d records found — parity check)\n" n1 n2)
         ;; LRU: what fraction of a zipfian stream a bounded hot cache would serve
         (doseq [cap [1000 10000 100000]]
           (let [lru  (java.util.LinkedHashMap. 16 0.75 true)
@@ -315,8 +315,8 @@
                                        (.remove lru (.next (.iterator (.keySet lru)))))
                                      h)))
                              0 zipf)]
-            (println (format "  LRU cap %,8d → %5.1f%% hit rate on the zipfian stream"
-                             cap (* 100.0 (/ (double hits) k))))))
+            (printf "  LRU cap %,8d → %5.1f%% hit rate on the zipfian stream\n"
+                    cap (* 100.0 (/ (double hits) k)))))
         (measure-fetch-attribution store unif)
         ;; and the cache as it actually ships: a second store over the same files, with
         ;; the per-kind LRU on.  Same handle stream, so the delta is the cache alone.
@@ -324,8 +324,8 @@
           (let [hot (drs/open-record-store dir {:cache-capacity cap})]
             (fetch-per-handle hot (take 5000 zipf))              ; warm the LRU
             (let [[z _] (fetch-per-handle hot zipf)]
-              (println (format "  hot cache cap %,6d → zipfian stream %6.0f ms (%.2f× the uncached %.0f ms)"
-                               cap z (/ p2 z) p2)))
+              (printf "  hot cache cap %,6d → zipfian stream %6.0f ms (%.2f× the uncached %.0f ms)\n"
+                      cap z (/ p2 z) p2))
             (drs/close! hot)))
         (drs/close! store)
         [log-b load-ms]))))
@@ -352,26 +352,26 @@
     (dotimes [_ 2] (fetch-per-handle store (take 5000 probe)))
     (let [[t _] (fetch-per-handle store probe)]
       (println "\n══ Phase 4.1d: tokenized bodies (opt-in) ══")
-      (println (format "  positional log   %8.1f MB (%.1f B/record)" (mb plain-log-b) (/ (double plain-log-b) n)))
-      (println (format "  tokenized log    %8.1f MB (%.1f B/record)   %.2f×"
-                       (mb log-b) (/ (double log-b) n) (/ (double plain-log-b) log-b)))
-      (println (format "  + its dictionary %8.1f MB (%,d tokens, written once — not per frame)"
-                       (mb dic-b) (dtok/token-count (:dict store))))
-      (println (format "  → records on disk%8.1f MB → %.1f MB   %.2f× all in"
-                       (mb plain-log-b) (mb (+ log-b dic-b)) (/ (double plain-log-b) (+ log-b dic-b))))
-      (println (format "  uncached fetch over %,d handles: %.0f ms (%.2f µs/record)"
-                       (count probe) t (* 1000.0 (/ t (count probe)))))
-      (println (format "  load: %.1f s vs %.1f s positional (%.0f%% — the encode, not fsyncs: the"
-                       (/ load 1000.0) (/ (double plain-load-ms) 1000.0)
-                       (* 100.0 (dec (/ load (double plain-load-ms))))))
+      (printf  "  positional log   %8.1f MB (%.1f B/record)\n" (mb plain-log-b) (/ (double plain-log-b) n))
+      (printf  "  tokenized log    %8.1f MB (%.1f B/record)   %.2f×\n"
+               (mb log-b) (/ (double log-b) n) (/ (double plain-log-b) log-b))
+      (printf  "  + its dictionary %8.1f MB (%,d tokens, written once — not per frame)\n"
+               (mb dic-b) (dtok/token-count (:dict store)))
+      (printf  "  → records on disk%8.1f MB → %.1f MB   %.2f× all in\n"
+               (mb plain-log-b) (mb (+ log-b dic-b)) (/ (double plain-log-b) (+ log-b dic-b)))
+      (printf  "  uncached fetch over %,d handles: %.0f ms (%.2f µs/record)\n"
+               (count probe) t (* 1000.0 (/ t (count probe))))
+      (printf  "  load: %.1f s vs %.1f s positional (%.0f%% — the encode, not fsyncs: the\n"
+               (/ load 1000.0) (/ (double plain-load-ms) 1000.0)
+               (* 100.0 (dec (/ load (double plain-load-ms)))))
       (println "        dictionary is ordered by fsync rather than fsynced per token)")
       ;; the caveat that decides how to read the dictionary row: a UNIFORM sample of a
       ;; corpus deliberately breaks locality, so it sees each term about once and the
       ;; dictionary is corpus-sized while the records are sample-sized.  On the whole
       ;; store the same vocabulary amortizes over ~56× more records.
-      (println (format "  NOTE: %,d tokens over %,d sampled records is %.2f tokens/record — a uniform"
-                       (dtok/token-count (:dict store)) n
-                       (/ (double (dtok/token-count (:dict store))) n)))
+      (printf  "  NOTE: %,d tokens over %,d sampled records is %.2f tokens/record — a uniform\n"
+               (dtok/token-count (:dict store)) n
+               (/ (double (dtok/token-count (:dict store))) n))
       (println "        sample has almost no vocabulary reuse, so the dictionary row here is a")
       (println "        worst case; the log row is the one that carries over."))
     (drs/close! store)))
@@ -390,12 +390,12 @@
           toks-b (postings/retained (into [] (remove nil?)
                                           (map #(tok/id-token dict %) (range (tok/token-count dict)))))]
       (println "\n══ Phase 4.3: record RAM (the :memory backend) — what int-id bodies would release ══")
-      (println (format "  record store           %8.1f MB   (%,d sentexes, %.0f B/record)"
-                       (mb recs-b) n (/ (double recs-b) (max 1 n))))
-      (println (format "  the token objects in them %6.1f MB   (%,d distinct — shared with the columnar dictionary)"
-                       (mb toks-b) (tok/token-count dict)))
-      (println (format "  → structure (list cells + record headers) %.1f MB is the rest; interning cannot touch it,"
-                       (mb (- recs-b toks-b))))
+      (printf  "  record store           %8.1f MB   (%,d sentexes, %.0f B/record)\n"
+               (mb recs-b) n (/ (double recs-b) (max 1 n)))
+      (printf  "  the token objects in them %6.1f MB   (%,d distinct — shared with the columnar dictionary)\n"
+               (mb toks-b) (tok/token-count dict))
+      (printf  "  → structure (list cells + record headers) %.1f MB is the rest; interning cannot touch it,\n"
+               (mb (- recs-b toks-b)))
       (println "    an int[] body can."))))
 
 (defn -main [& args]
@@ -403,7 +403,7 @@
         dir   (or (second args) survey/default-dir)
         _     (survey/ensure-store! dir n)
         recs  (survey/uniform-records dir n)]
-    (println (format "vaelii Phase-4 record measurement — %,d real records (uniform sample)" (count recs)))
+    (printf  "vaelii Phase-4 record measurement — %,d real records (uniform sample)\n" (count recs))
     (println "Density (jol retained heap) and frozen bytes are TRUSTED; wall-clock is indicative.")
     (let [frozen (measure-frozen recs)]
       (measure-frame-codec recs)

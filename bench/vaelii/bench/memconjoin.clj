@@ -73,10 +73,10 @@
 (defn- build [rels]
   {:tuples rels
    :argument-root   (into {} (map (fn [[rid ts]]
-                           [rid (persistent!
-                                 (reduce (fn [m [h [_ x]]] (assoc! m x (conj (get m x #{}) h)))
-                                         (transient {}) (map-indexed vector ts)))]))
-                 rels)
+                                    [rid (persistent!
+                                          (reduce (fn [m [h [_ x]]] (assoc! m x (conj (get m x #{}) h)))
+                                                  (transient {}) (map-indexed vector ts)))]))
+                          rels)
    :xdom   (into {} (map (fn [[rid ts]] [rid (into #{} (map second) ts)])) rels)
    :trie   (into {} (map (fn [[rid ts]] [rid (build-trie ts)])) rels)})
 
@@ -156,8 +156,8 @@
         cfg   {:xdom-size xdsz :a-size 40 :sizes sizes}
         rng   (java.util.Random. 42)]
     (println "vaelii conjunctive-join benchmark — IN-MEMORY — star join on ?x (position 2)")
-    (println (format "relations r0/r1/r2 = %,d / %,d / %,d tuples over an ?x-domain of %,d, |a|=40\n"
-                     (nth sizes 0) (nth sizes 1) (nth sizes 2) xdsz))
+    (printf  "relations r0/r1/r2 = %,d / %,d / %,d tuples over an ?x-domain of %,d, |a|=40\n\n"
+             (nth sizes 0) (nth sizes 1) (nth sizes 2) xdsz)
     (let [rels  (gen rng cfg)
           ix    (build rels)
           exts  (into {} (map (fn [r] [r (count (get-in ix [:tuples r]))]) rel-ids))
@@ -166,27 +166,27 @@
           xs    (x-intersection ix order)]
       (println "counts the planner reads:")
       (doseq [r rel-ids]
-        (println (format "  %s: extent %,d   distinct ?x %,d" r (exts r) (doms r))))
-      (println (format "  join order (smallest extent first): %s" (vec order)))
-      (println (format "  leapfrog lead (smallest ?x-domain): %s   |?x common to all three| = %,d"
-                       (apply min-key doms rel-ids) (count xs)))
+        (printf "  %s: extent %,d   distinct ?x %,d\n" r (exts r) (doms r)))
+      (printf "  join order (smallest extent first): %s\n" (vec order))
+      (printf "  leapfrog lead (smallest ?x-domain): %s   |?x common to all three| = %,d\n"
+              (apply min-key doms rel-ids) (count xs))
 
       (let [trie (timed 20 #(left-deep ix order trie-probe))
             argp (timed 20 #(left-deep ix order arg-probe))
             leap (timed 20 #(leapfrog  ix order))]
         (println)
-        (println (format "%-14s %14s %16s %12s %10s"
-                         "strategy" "unify calls" "bindings thread" "results" "ms"))
+        (printf  "%-14s %14s %16s %12s %10s\n"
+                 "strategy" "unify calls" "bindings thread" "results" "ms")
         (println (apply str (repeat 69 \-)))
         (doseq [[label m] [["trie-walk" trie] ["access-path" argp] ["leapfrog" leap]]]
-          (println (format "%-14s %14d %16d %12d %10.3f"
-                           label (:unify m) (:bindings m) (:results m) (:ms m))))
-        (println (format "\nall strategies agree on the result set: %s"
-                         (= (:results trie) (:results argp) (:results leap))))
-        (println (format "1->2 (access-path selection): ms %.3f -> %.3f  (%.1fx)  — a CPU difference, every path a map probe"
-                         (:ms trie) (:ms argp) (/ (:ms trie) (max 1e-6 (:ms argp)))))
-        (println (format "2->3 (leapfrog): unify %,d -> %,d (%.1fx), bindings %,d -> %,d (%.1fx), ms %.3f -> %.3f (%.1fx)"
-                         (:unify argp) (:unify leap) (/ (double (:unify argp)) (max 1 (:unify leap)))
-                         (:bindings argp) (:bindings leap) (/ (double (:bindings argp)) (max 1 (:bindings leap)))
-                         (:ms argp) (:ms leap) (/ (:ms argp) (max 1e-6 (:ms leap))))))
+          (printf "%-14s %14d %16d %12d %10.3f\n"
+                  label (:unify m) (:bindings m) (:results m) (:ms m)))
+        (printf  "\nall strategies agree on the result set: %s\n"
+                 (= (:results trie) (:results argp) (:results leap)))
+        (printf  "1->2 (access-path selection): ms %.3f -> %.3f  (%.1fx)  — a CPU difference, every path a map probe\n"
+                 (:ms trie) (:ms argp) (/ (:ms trie) (max 1e-6 (:ms argp))))
+        (printf  "2->3 (leapfrog): unify %,d -> %,d (%.1fx), bindings %,d -> %,d (%.1fx), ms %.3f -> %.3f (%.1fx)\n"
+                 (:unify argp) (:unify leap) (/ (double (:unify argp)) (max 1 (:unify leap)))
+                 (:bindings argp) (:bindings leap) (/ (double (:bindings argp)) (max 1 (:bindings leap)))
+                 (:ms argp) (:ms leap) (/ (:ms argp) (max 1e-6 (:ms leap)))))
       (shutdown-agents))))

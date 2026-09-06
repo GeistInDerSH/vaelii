@@ -38,8 +38,8 @@
       (let [ms    (/ (- (System/nanoTime) t0) 1e6)
             n     (p/count-with-functor (:index kb) 'rel)
             trunc (boolean (get-in (v/chain-stats kb) [:last :truncated?]))]
-        (println (format "  m=%-3d | rel facts %,7d  (m² = %,7d, %s) | truncated %-5s | %,.0f ms | TERMINATED"
-                         m n (* m m) (if (= n (* m m)) "full closure" "partial") trunc ms))))))
+        (printf "  m=%-3d | rel facts %,7d  (m² = %,7d, %s) | truncated %-5s | %,.0f ms | TERMINATED\n"
+                m n (* m m) (if (= n (* m m)) "full closure" "partial") trunc ms)))))
 
 (defn -main [& args]
   (let [maxm (or (some-> (first args) Long/parseLong) 12)]

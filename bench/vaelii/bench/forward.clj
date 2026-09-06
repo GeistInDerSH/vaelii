@@ -66,16 +66,16 @@
 (defn- synthetic [maxn]
   (println "vaelii forward-inference budget — parentOf⇒grandparentOf (2-join) + greatGrandparentOf (3-join)")
   (println "derived counts + RAM are TRUSTED; wall-clock is UNTRUSTED (ratio reference:rete is the signal).")
-  (println (format "\n  %-10s %8s %10s %10s %12s %12s %10s" "matcher" "facts" "derived" "µs/fact" "total ms" "reference×" "RAM MB"))
+  (printf  "\n  %-10s %8s %10s %10s %12s %12s %10s\n" "matcher" "facts" "derived" "µs/fact" "total ms" "reference×" "RAM MB")
   (println (str "  " (apply str (repeat 78 \-))))
   (doseq [n (take-while #(<= % maxn) [500 1000 2000 4000 8000])]
     (let [ref  (run "reference" false n (java.util.Random. 1))
           ret  (run "rete"      true  n (java.util.Random. 1))]
       (doseq [{:keys [matcher derived per ms ram]} [ref ret]]
-        (println (format "  %-10s %8s %10s %10.1f %12.1f %12s %10.1f"
-                         matcher (format "%,d" n) (format "%,d" derived) (* 1000.0 per) ms
-                         (if (= matcher "rete") (format "%.1f×" (/ (:ms ref) (max 0.01 ms))) "—")
-                         (/ ram 1048576.0))))
+        (printf "  %-10s %8s %10s %10.1f %12.1f %12s %10.1f\n"
+                matcher (format "%,d" n) (format "%,d" derived) (* 1000.0 per) ms
+                (if (= matcher "rete") (format "%.1f×" (/ (:ms ref) (max 0.01 ms))) "—")
+                (/ ram 1048576.0)))
       (println)))
   (println "  Reading: derived/facts is the MATERIALIZATION factor (storage budget = derived × ~2.3 KB");
   (println "  record+index+JTMS). reference× is RETE's forward-matching speedup; if it grows with N,")
@@ -94,8 +94,8 @@
                        (fn [k] (require 'vaelii.core) ((resolve 'vaelii.core/recover) k))
                        (fn [k] (require 'vaelii.core) ((resolve 'vaelii.core/reindex) k)))]
     (p/clear-records! (:records kb)) (p/clear-index! (:index kb))
-    (println (format "vaelii forward — REAL: %,d facts + %,d real rules turned FORWARD (READ-ONLY source)"
-                     (count facts) (count rules)))
+    (printf "vaelii forward — REAL: %,d facts + %,d real rules turned FORWARD (READ-ONLY source)\n"
+            (count facts) (count rules))
     (rete/enable!) (rete/track! kb)
     (let [loaded (atom 0) rejected (atom 0)
           f-ok (atom 0) f-bad (atom 0) why (atom {})]
@@ -113,13 +113,13 @@
       (let [base @f-ok
             total (count (p/sentex-ids (:records kb)))
             derived (- total base @loaded)]
-        (println (format "  facts asserted: %,d ok, %,d rejected" @f-ok @f-bad))
-        (println (format "  rejection reasons (ex-info :type): %s" (pr-str @why)))
-        (println (format "  rules asserted forward: %,d  (rejected %,d)" @loaded @rejected))
-        (println (format "  derived facts from forward firing: %,d  (%.2f× the fact base)"
-                         (max 0 derived) (/ (double (max 0 derived)) (max 1 base))))
-        (println (format "  chain-stats: %s" (pr-str (v/chain-stats kb))))
-        (println (format "  RAM (records+index+JTMS): %.1f MB" (/ (kb-ram kb) 1048576.0)))))
+        (printf "  facts asserted: %,d ok, %,d rejected\n" @f-ok @f-bad)
+        (printf "  rejection reasons (ex-info :type): %s\n" (pr-str @why))
+        (printf "  rules asserted forward: %,d  (rejected %,d)\n" @loaded @rejected)
+        (printf "  derived facts from forward firing: %,d  (%.2f× the fact base)\n"
+                (max 0 derived) (/ (double (max 0 derived)) (max 1 base)))
+        (printf "  chain-stats: %s\n" (pr-str (v/chain-stats kb)))
+        (printf "  RAM (records+index+JTMS): %.1f MB\n" (/ (kb-ram kb) 1048576.0))))
     (rete/disable!)))
 
 (defn -main [& args]

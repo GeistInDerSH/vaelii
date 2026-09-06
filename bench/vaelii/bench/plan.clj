@@ -176,22 +176,22 @@
                        (let [kb (v/open-kb {:backend :memory :space 30 :recover? false})]
                          (build! kb width n m)
                          [width kb])))]
-    (println (format "vaelii conjunctive planning — chain of %,d facts per link, loose relation of %,d" n m))
+    (printf  "vaelii conjunctive planning — chain of %,d facts per link, loose relation of %,d\n" n m)
 
     ;; ---- the cost model, before any plan is timed --------------------------
     (println "\n  q-error per join depth — the estimate against the rows the prefix returns.")
     (println "  Flat in k is the claim that the estimates compose; growing in k withdraws it.")
-    (println (format "\n  %-7s %s" "lits" "q at k = 1, 2, …"))
+    (printf  "\n  %-7s %s\n" "lits" "q at k = 1, 2, …")
     (println (str "  " (apply str (repeat 60 \-))))
     (doseq [width [2 3 4 5]]
       (let [qs (q-errors (kbs width) (conjunction width))]
-        (println (format "  %-7s %s" (inc width)
-                         (str/join "  " (map #(format "%.2f" %) qs))))))
+        (printf "  %-7s %s\n" (inc width)
+                (str/join "  " (map #(format "%.2f" %) qs)))))
 
     ;; ---- and then the orders ----------------------------------------------
     ;; the conjunction is the chain plus the loose literal, so it is one wider
-    (println (format "\n  %-7s %-30s %10s %10s %9s %11s"
-                     "lits" "strategy" "rows" "exec ms" "exec x" "plan ms"))
+    (printf  "\n  %-7s %-30s %10s %10s %9s %11s\n"
+             "lits" "strategy" "rows" "exec ms" "exec x" "plan ms")
     (println (str "  " (apply str (repeat 82 \-))))
     (println "  row counts are TRUSTED (structural); wall-clock is a ratio against the best of the three.")
     (doseq [width [2 3 4 5]]
@@ -208,12 +208,12 @@
             best  (apply min (map (comp :ms val) runs))]
         (doseq [k [:written :greedy :placed]]
           (let [{:keys [rows ms]} (runs k)]
-            (println (format "  %-7s %-30s %,10d %10.1f %8.2fx %11.4f"
-                             (if (= k :written) (inc width) "")
-                             (name k) rows ms (/ ms best)
-                             (if (= k :written)
-                               0.0
-                               (plan-cost-ms kb q (if (= k :greedy) :greedy :placed) 1000))))))
+            (printf "  %-7s %-30s %,10d %10.1f %8.2fx %11.4f\n"
+                    (if (= k :written) (inc width) "")
+                    (name k) rows ms (/ ms best)
+                    (if (= k :written)
+                      0.0
+                      (plan-cost-ms kb q (if (= k :greedy) :greedy :placed) 1000)))))
         (println)))
     (println "  A `placed` row that beats `greedy` on rows is the whole claim; one that does")
     (println "  not, at a width the engine actually sees, is the claim being withdrawn.")
@@ -222,13 +222,13 @@
     (println "\n  The same conjunction as a rule's antecedents, reached by proving its head.")
     (println "  Stored antecedent order is canonical order, so what the planner is")
     (println "  standing between is the author's spelling and the cost of running it.")
-    (println (format "\n  %-9s %10s %14s %14s %9s"
-                     "antes" "solutions" "unplanned ms" "planned ms" "speedup"))
+    (printf  "\n  %-9s %10s %14s %14s %9s\n"
+             "antes" "solutions" "unplanned ms" "planned ms" "speedup")
     (println (str "  " (apply str (repeat 62 \-))))
     (doseq [width [3 4]]
       (let [[[n0 off] [n1 on]] (rule-expansion-ms (kbs width) width m)]
-        (println (format "  %-9s %,10d %14.1f %14.1f %8.2fx"
-                         (inc width) n1 off on (/ off (max 0.001 on))))
+        (printf "  %-9s %,10d %14.1f %14.1f %8.2fx\n"
+                (inc width) n1 off on (/ off (max 0.001 on)))
         (when (not= n0 n1)
-          (println (format "  !! planned returned %,d solutions and unplanned %,d — planning may not change the answer set"
-                           n1 n0)))))))
+          (printf "  !! planned returned %,d solutions and unplanned %,d — planning may not change the answer set\n"
+                  n1 n0))))))
