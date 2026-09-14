@@ -631,7 +631,7 @@ cheapest level that answers. See [levels.md](levels.md).
 
 **Literal** ![kb](../.github/badges/cat-kb.svg): An **Atomic formula** or its
 negation. What a `LiteralSentex` holds — the `:sentence` slot carrying the atomic
-formula and the polarity slot saying which of the two literals it is. A rule's
+formula, or `(not S)` for its negation, whose head `not` says which literal it is. A rule's
 antecedent is a vector of literals. Also a CxCore collection, `literal`, in the
 expression-kind lattice beside `formula` and `relation_application` — documentary, since
 nothing in the engine classifies a compound by its shape. The `LiteralSentex` record is
@@ -762,9 +762,9 @@ estimate. The cost model is the count-aware trie
 itself. See [inference.md](inference.md).
 
 **Polarity** ![kb](../.github/badges/cat-kb.svg): Which of the two literals an
-atomic formula makes — positive, or negative under a `not`. Carried by the sentex's
-polarity slot and kept in the index. **Not** belief, which is IN/OUT and a separate
-question. See [canonicalization.md](canonicalization.md).
+atomic formula makes — positive, or negative under a `not`. Read off the head `not` of
+the stored sentence (`sentex/negative?`) and kept in the index. **Not** belief, which is
+IN/OUT and a separate question. See [canonicalization.md](canonicalization.md).
 
 **Polycanonicalization** ![kb](../.github/badges/cat-kb.svg): Storing one written
 rule as several, so a connective that is not about one rule never reaches a

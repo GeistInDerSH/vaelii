@@ -52,8 +52,8 @@
         (testing "step 2 — one more true thing, and the conclusion is *gone*"
           (is (nil? (v/handle-of kb flies sbx)) "not merely OUT — there is no handle")
           (is (nil? (v/sentex kb h1)) "the record itself was swept")
-          (is (nil? (v/handle-of kb travel sbx))
-              "and what rested on it went too — the sweep is not shallow")
+          (is (not (v/ask? kb travel sbx))
+              "and the hierarchy answer goes with it — flying gone means travelling unanswerable")
           (let [{:keys [reason rule exception]} (v/why-not kb flies sbx)]
             (is (= :excepted reason) "blocked by the rule's own exception, not defeated")
             (is (nat-int? rule) "which names the rule, so the page can link it")
@@ -68,7 +68,7 @@
             (is (v/in? kb h2))
             (is (not= h1 h2) "revival is a re-derivation; a flipped flag would reuse the handle")
             (is (nil? (v/sentex kb h1)) "and step 1's handle still resolves to nothing")
-            (is (some? (v/handle-of kb travel sbx)) "the consequence was re-earned too"))
+            (is (v/ask? kb travel sbx) "and the hierarchy answer returns — travelling answerable again"))
           (testing "the proof is identical, which is the other half of the point"
             (let [rule-of #(-> (v/why kb %) :support first :rule)
                   from-of #(-> (v/why kb %) :support first :because first :handle)]
@@ -169,21 +169,36 @@
       (finally (sandbox/reset! kb sandbox)))))
 
 (tu/deftest-kb the-cascade-is-visible-at-every-step
-  (testing "the conclusion does not go alone, and the page shows the whole of what moved"
+  ;; The page renders every watched sentence at every step: a stored one with its record,
+  ;; and travelling with what `ask?` answers, because the capability hierarchy answers it
+  ;; at retrieval and stores no record.
+  (testing "the page shows what moved, stored and answered alike"
     (let [app (web/app kb)
           {:keys [cookie sandbox body]} (open-session app)
-          gone? (fn [b form]
-                  (some? (re-find (re-pattern (str (java.util.regex.Pattern/quote form)
-                                                   " \\) not stored"))
-                                  (text-of b))))]
+          shows? (fn [b form tag]
+                   (some? (re-find (re-pattern (str (java.util.regex.Pattern/quote form)
+                                                    " \\) " tag))
+                                   (text-of b))))
+          travel-row "( hasCapability Pingu travelling"]
       (try
         (let [[_ b1 b2 b3] (run-through app cookie body ["start" "except" "restore"])]
-          (is (gone? b1 "( penguin Pingu") "before step 2, nothing says Pingu is a penguin")
-          (is (gone? b2 "( hasCapability Pingu travelling")
-              "when flight goes, what rested on it goes with it, and the page shows that")
-          (is (gone? b3 "( penguin Pingu") "and step 3 takes the penguin claim back")
-          (is (not (gone? b3 "( hasCapability Pingu travelling")) "so the consequence returns too"))
-        (finally (sandbox/reset! kb sandbox))))))
+          (is (shows? b1 "( penguin Pingu" "not stored") "before step 2, nothing says Pingu is a penguin")
+          (is (shows? b1 travel-row "answerable") "step 1: what flies travels")
+          (is (shows? b2 travel-row "unanswerable") "step 2: travelling goes with the flight")
+          (is (shows? b3 "( penguin Pingu" "not stored") "and step 3 takes the penguin claim back")
+          (is (shows? b3 travel-row "answerable") "so travelling is answerable again"))
+        (finally (sandbox/reset! kb sandbox)))))
+  (testing "the hierarchy cascade — travelling tracks flying without a stored record"
+    (let [sbx (fresh-sandbox)]
+      (sandbox/open kb sbx)
+      (try
+        (v/assert kb bird sbx)
+        (is (v/ask? kb travel sbx) "step 1: flying earned → travelling answerable via hierarchy")
+        (v/assert kb penguin sbx)
+        (is (not (v/ask? kb travel sbx)) "step 2: flying defeated → travelling unanswerable")
+        (v/retract! kb (v/handle-of kb penguin sbx))
+        (is (v/ask? kb travel sbx) "step 3: flying restored → travelling answerable again")
+        (finally (sandbox/reset! kb sbx))))))
 
 (tu/deftest-kb running-it-twice-leaves-no-residue
   (let [app    (web/app kb)

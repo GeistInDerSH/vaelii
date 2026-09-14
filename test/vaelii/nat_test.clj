@@ -316,6 +316,20 @@
         (is (empty? (kb/find-sentexes kb k)))
         (is (empty? (nat/orphaned-constants kb)))))))
 
+(tu/deftest-kb removing-the-last-rule-naming-a-reified-nat-collects-it
+  (tu/with-terms [FruitFn AppleTree fruit likes knows]
+    (v/assert kb (list 'reifiable_function FruitFn) 'CxUniverse)
+    (v/assert kb (list 'result FruitFn fruit) 'CxUniverse)
+    (let [h (v/assert kb (list 'implies (list likes '?x (list FruitFn AppleTree))
+                               (list knows '?x AppleTree))
+                      'CxUniverse)]
+      (is (some? (nat/dedup-constant kb (list FruitFn AppleTree)))
+          "the rule's antecedent reified the NAT")
+      (v/retract! kb h)
+      (testing "the teardown reads a rule's antecedent as a use, so the constant goes with it"
+        (is (nil? (nat/dedup-constant kb (list FruitFn AppleTree))))
+        (is (empty? (nat/orphaned-constants kb)))))))
+
 ;; The sweep separates a use from bookkeeping by **what the mint wrote**, not by what a
 ;; sentence looks like.  The two are not the same question: a user's own unary claim about
 ;; a reified NAT has a materialized result type's shape — `(T K)`, and `(genl K T)` for the

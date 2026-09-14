@@ -339,9 +339,11 @@ line `provers`' four functor rosters sit on either side of ([inference.md](infer
 
 **The structural connectives are declared for their shape and nothing else.** `not`, `and`,
 `or`, `implies` and the rule-direction wrappers are written through the `structural`
-constructor: `[:none]` storage, no facets, no arms. The canonicalizer reads them into a
-*slot of the record* — polarity, antecedent, consequent — so no sentex is ever stored under
-one of these functors, and there is no assert path to join, no cache to maintain and no
+constructor: `[:none]` storage, no facets, no arms. The canonicalizer reads `implies`,
+`and` and the wrappers into *slots of the record* — antecedent, consequent, direction —
+and keeps a `not` as the head of a negative literal's sentence, where the index reads it
+as the sign. So no sentex is ever indexed under one of these functors, and there is no
+assert path to join, no cache to maintain and no
 retraction to mirror. `:shape` is the whole of what the engine is told, and the well-formedness
 that shape implies is enforced before the record exists. This is permanent: the day a
 connective needed an arm would be the day it stopped being a connective.

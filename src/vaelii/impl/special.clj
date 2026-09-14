@@ -1607,7 +1607,7 @@
   antecedent could ever have climbed licensed nothing to revive.  A KB whose rules read
   no negation, which is nearly every KB, pays one pass over the roster's keys.
 
-  Negative sentexes only, decided on the record's own `:polarity`: a *positive* fact on a
+  Negative sentexes only, decided by the stored sentence's head `not`: a *positive* fact on a
   genl of `super` newly matches nothing, since a positive antecedent fans downward and
   the edge moved nothing above `super`."
   [kb sub super]

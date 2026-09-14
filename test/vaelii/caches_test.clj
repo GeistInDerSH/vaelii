@@ -506,7 +506,7 @@
   #{:literal-matches :resident :stored-handles :closure-neighbours :closure-answers
     :pinned-values :justification-dedup :symbol-pool :compiled-algebras :relation-decode
     :path-consistency :network-support :taxonomy-closures :taxonomy-scoped-closures
-    :taxonomy-visibility :hot-records :rete-alpha})
+    :taxonomy-visibility :hot-records :rete-alpha :source-parses})
 
 (def ^:private optional-roster
   "Caches registered by a namespace core does **not** load, so whether they are present
@@ -585,7 +585,8 @@
    "compiled-cache-limit"  :compiled-algebras
    "closure-cache-limit"   :metric-closures
    "*symbol-pool-limit*"   :symbol-pool
-   "*scoped-memo-budget*"  :taxonomy-scoped-closures})
+   "*scoped-memo-budget*"  :taxonomy-scoped-closures
+   "parse-memo-limit"      :source-parses})
 
 (defn- limit-constants
   "Every limit-shaped constant defined under `src/`."

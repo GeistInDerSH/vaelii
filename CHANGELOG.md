@@ -5,11 +5,49 @@ Notable changes to `vaelii`, newest first. Versions follow
 entry raises the minor. What each class means, and why a **Refusal** is patch-eligible,
 is [CONTRIBUTING.md §3](CONTRIBUTING.md).
 
-**Releases before 0.17.0 are summarized rather than reproduced.** Each one keeps its
-title, its class census and every `*Breaks:*` token, so an upgrade across several
-releases is still a grep for the name you call. The full entry prose for a released
-version is in this file's git history, at the tag of the release that shipped it —
-`git show v0.16.0:CHANGELOG.md`.
+**Releases before 0.19.0 are summarized rather than reproduced.** Each one
+keeps its title, its class census and every `*Breaks:*` token, so an upgrade across
+several releases is still a grep for the name you call. The full entry prose for a
+released version is in this file's git history, at the tag of the release that shipped
+it — `git show v0.16.0:CHANGELOG.md`.
+
+## 0.19.1 — 2026-09-14 — "rule readers take the implies form from sentence-of, and the source identity parses only what changed"
+
+- **The NAT teardown, the index fingerprint, the retired-spelling filter, the vantage
+  supporter check and the QCN refuted-pair read take a rule's `implies` form from
+  `sentence-of`.** 0.19.0 dropped the `sentence` slot from a rule record, and these five
+  readers still read the slot, so each read `nil` for every rule. Retracting the last rule
+  that names a reified NAT left the constant uncollected, and an index dump's fingerprint
+  over rules differed from the digest an earlier release wrote. Each reader now calls
+  `sx/sentence-of`, so the fingerprint over rules is again the digest it was before the
+  slot went, and an index dump written before 0.19.0 matches. *Class:* **Fix** (a
+  regression 0.19.0 shipped). *Migration:* none. [docs/nat.md](docs/nat.md),
+  [docs/storage.md](docs/storage.md)
+
+- **The source identity parses a source file only when the file changed.** 0.19.0
+  computes the digest on every `import!` and `export!` that carries a belief image and on
+  every disk-snapshot open and close, and each computation read, parsed and printed all
+  111 engine namespaces: 1.1 s a call. The parse of each file is now memoized in a new
+  process cache `:source-parses`. A call takes each file's modification time and length,
+  reads and hashes only a file whose stat moved, and parses only a file whose SHA-256
+  moved: 9 ms a call after the first. A file modified within 2 s before its last read is
+  read again, so the digest still describes the files as they stand at the call. The test
+  suite's per-namespace time summed across CI shards rose from 3,482 s to 6,270 s in 0.19.0;
+  `relation-properties-test`, which imports a core dump per test, runs in 15.8 s against
+  40 s. *Class:* **Fix** (a regression 0.19.0 shipped). *Migration:* none.
+  [docs/caches.md](docs/caches.md)
+
+- **The shipped `CxBiology` stores no `(hasCapability ?x travelling)`; the capability
+  hierarchy answers it.** A forward rule concluded travelling from flying, which
+  `(transitiveInArgInverse hasCapability 2 genl)` with `(genl flying travelling)` already
+  answers at retrieval, so every flyer carried a second stored record and justification.
+  The rule is removed. `ask?` and `prove` answer `(hasCapability Tweety travelling)` as
+  before, and answer nothing while the flight is defeated; `sentexes-matching` and
+  `handle-of` find no stored travelling record. The `/demo` walkthrough's travelling row
+  shows what `ask?` answers. *Class:* **Fix** (a `sentexes-matching` or `handle-of` read of
+  a travelling conclusion returns nothing where it returned the record). *Migration:* read
+  a capability the hierarchy reaches with `ask?` or `prove`.
+  [docs/inherit.md](docs/inherit.md), [docs/web.md](docs/web.md)
 
 ## 0.19.0 — 2026-09-13 — "a belief image in place of recover, and sentex records that no longer restate their sentence"
 
@@ -37,13 +75,14 @@ version is in this file's git history, at the tag of the release that shipped it
   form from them, and `readable-sentence` the same form in the author's variable names.
   The daemon serves `sentence-of` as the `:sentence-of` op, which takes no KB.
   The trie key is built from that same form, so an index written before this change reads
-  unchanged. A disk frame drops the field (new rule tags; older frames decode by reading
-  past it): a rule frame on the plain codec is 132–143 B where it was 219–238 B on the
-  three corpora measured, and a `RuleSentex` is 72 B on the heap where it was 80 B, before
-  counting the `implies` form it no longer holds. An export dump's rule frame still
-  carries `:sentence`, so the dump format is unchanged. A negated rule
-  `(not (implies …))`, which `assert` already refuses, is now refused by the constructor
-  too, since a record with no sentence has no place for the sign. *Class:* **Breaking** (`sentex`, `sentexes-matching`, `canonical-sentex` and the
+  unchanged. A disk frame drops the field
+  (new rule tags; older frames decode by reading past it): a rule frame on the plain codec
+  is 132–143 B where it was 219–238 B on the three corpora measured, and a `RuleSentex` is
+  72 B on the heap where it was 80 B, before counting the `implies` form it no longer
+  holds. An export dump's rule frame still carries `:sentence`, so the dump format is
+  unchanged. A negated rule `(not (implies …))`, which `assert` already refuses, is now
+  refused by the constructor too, since a record with no sentence has no place for the
+  sign. *Class:* **Breaking** (`sentex`, `sentexes-matching`, `canonical-sentex` and the
   extent readers return rule maps without `:sentence`, and the daemon's wire records lose
   the key). *Migration:* a caller that read a rule's `(:sentence s)` calls `(sentence-of
   s)`, or `(readable-sentence s)` for display; a caller that split the sentence reads
@@ -275,6 +314,80 @@ version is in this file's git history, at the tag of the release that shipped it
   rebuilds its index on open. The open passes `:recover? :auto`, so a stored belief image
   installs when its stamp matches. *Class:* **Fix**. *Migration:* none.
   [docs/catalog.md](docs/catalog.md), [docs/web.md](docs/web.md)
+
+- **The disk store's `compact!` keeps a sentex's premise mark when the provenance frame at
+  its handle is lost.** `compact!` handed the premise set to every kind's compaction, so a
+  provenance frame lost at a sentex's handle removed that sentex's premise mark for the
+  rest of the session. Only the sentexes compaction receives the premise set now.
+  *Class:* **Fix**. *Migration:* none. *Released in 0.19.0; this entry was added after the
+  release.* [docs/storage.md](docs/storage.md)
+
+- **The special-predicate table refuses an arm keyed on a functor no declaration places in
+  it, at namespace load.** `special/check-declarations` read its enumeration halves off the
+  entries vector, which held only the functors `pr/in-special-table` admits, so an arm keyed
+  on an undeclared functor was dropped from the join rather than refused. It now reads the
+  arm functors off the arms map, which holds every armed functor, so the refusal
+  `docs/predicates.md` describes fires on the live table. *Class:* **Fix** (no shipped arm is
+  undeclared, so no answer moves). *Migration:* none. *Released in 0.19.0; this entry was
+  added after the release.* [docs/predicates.md](docs/predicates.md)
+
+- **Seven hot paths drop work that changes no answer.** A disk record fetch takes the
+  kind's read lock rather than an exclusive monitor, so a bulk sweep (`export!`, `reindex`,
+  the `recover` read side) reads records in parallel. The disk store holds the premise set
+  as a Roaring64 `LiveRoster` under the sentexes kind lock rather than a boxed hash set, and
+  answers `sentex-ids`, `justification-ids` and `premise-ids` as the immutable
+  `HandleRoster` snapshot rather than building a hash set per call. Recovery defers the
+  cycle-closing SCC repair of a `genl` or `genlCx` edge to one `restore-depths` pass
+  (`*defer-cycle-scc?*`, false on the live path). The retroactive membership sweep skips its
+  type-separating reach on a KB that declares no separation. The defn provers decide
+  `applicable?` from a stored-count gate and a `genl?` per declaring collection before any
+  ancestor walk. `classify-local` clusters dilemmas through the `touch` index in linear time
+  rather than by comparing every pair. *Class:* neither label — belief, the justification
+  set and the stored content are unchanged, so only latency and heap move. *Released in
+  0.19.0; this entry was added after the release.* [docs/storage.md](docs/storage.md),
+  [docs/labeling.md](docs/labeling.md)
+
+- **An operation log records a `:disk-snapshot` KB's public writes, and a seal and a
+  restore bring its directory back by replaying the log; no public entry point attaches a
+  log yet.** `vaelii.impl.oplog` appends one frame per outermost public write — the
+  operation, its arguments, and the clock, creator and dynamic bindings the call reads
+  beyond them — and a write nested inside another appends nothing. A seal-class call
+  (`import!`, `clear!`, `recover`, `reindex`, `load-text!`), a configuration call, an
+  argument nippy cannot freeze and a change-feed listener's write each mark the log unusable
+  until the next seal. `vaelii.impl.seal` writes the index and belief images, fsyncs the
+  record store, writes `oplog/seal.nippy` and starts a new log generation. A restore
+  installs both images against the seal's fingerprints and replays that generation's
+  frames, checking each replayed write against the stored record, and declines on any
+  mismatch. Every public write entry point in `vaelii.core` routes through `oplog/run-op`,
+  which does nothing on a KB with no log. A crash-cut sweep, exhaustive under
+  `lein test-fuzz`, and a multi-JVM kill test cover the restore. *Class:* **Additive**
+  (engine-internal: only `seal/attach!` attaches a log, and no public function calls it).
+  *Released in 0.19.0; this entry was added after the release.*
+  [docs/glossary.md](docs/glossary.md), [docs/namespaces.md](docs/namespaces.md)
+
+- **A settle-phase instrument splits a settle's wall clock into four cost centres, and
+  `lein bench-settlephases` reports the split.** `vaelii.impl.settle-phases` charges each
+  settle's self time to the centre running at that instant — belief fixpoint, contradiction
+  discovery, resolution and generative chaining — so a nested centre's time is subtracted
+  from its parent's and the four buckets sum to the whole. The instrument sits behind one
+  atom that is nil when off, where a probe costs a deref and a `nil?` check. `lein lint`'s
+  E17 also rosters `genlCx?-global`, the fifth global taxonomy read, and its one caller, the
+  `genlCx`-cycle refusal. *Class:* **Additive** (developer tooling; no public function
+  moves). *Released in 0.19.0; this entry was added after the release.*
+  [docs/namespaces.md](docs/namespaces.md)
+
+- **The engine's `project.clj` names no `vaelii-foreign` coordinate: the `:with-foreign`
+  profile is removed, and `scripts/with-foreign.sh` runs a lein task with the readers as an
+  ad-hoc dependency.** The profile pinned the plugin at the engine's own version, so a
+  carved engine named a plugin coordinate that had to exist on Clojars, and every engine
+  release forced a plugin release. A consumer's plugin use runs through the
+  `vaelii/foreign.edn` manifest on its own classpath, which the profile never touched. In
+  this checkout `scripts/with-foreign.sh` (default task `browser`, `FOREIGN_VERSION` to pin a
+  version) and `scripts/link-checkouts.sh` (live plugin source) replace it, and the
+  `bench-profile`, `bench-index` and `bench-alloc` aliases drop the profile. *Class:*
+  **Additive** (build tooling; `lein with-profile +with-foreign …` no longer resolves in this
+  checkout). *Released in 0.19.0; this entry was added after the release.*
+  [docs/foreign.md](docs/foreign.md)
 
 ## 0.18.1 — 2026-09-11 — "a typed bound at every entry point, and an upper ontology divided by space and time"
 

@@ -81,6 +81,29 @@
   (is (nil? (#'si/compiled-bytes 'vaelii.no-such-namespace (volatile! {})))
       "a namespace with neither source nor compiled code contributes nothing"))
 
+(deftest an-edited-file-is-parsed-again
+  (let [f     (java.io.File/createTempFile "source-identity" ".clj")
+        u     (.toURL (.toURI f))
+        parse #(:bytes (#'si/parse-source u))
+        same? #(java.util.Arrays/equals ^bytes %1 ^bytes %2)]
+    (try
+      (spit f "(ns demo.y) (defn g [x] (inc x))")
+      (.setLastModified f (- (System/currentTimeMillis) 60000))
+      (let [a (parse)]
+        (is (same? a (parse)) "an unchanged file answers the memo entry")
+        (testing "an edit that moves the modification time"
+          (spit f "(ns demo.y) (defn g [x] (dec x))")
+          (is (not (same? a (parse))))))
+      (testing "an edit that keeps the length and the modification time, within the window
+                after the read before it"
+        (spit f "(ns demo.y) (defn g [x] (inc x))")
+        (.setLastModified f (- (System/currentTimeMillis) 500))
+        (let [b (parse) m (.lastModified f)]
+          (spit f "(ns demo.y) (defn g [x] (dec x))")
+          (.setLastModified f m)
+          (is (not (same? b (parse))))))
+      (finally (.delete f)))))
+
 (deftest the-identity-is-stable-and-names-its-libraries
   (let [a (si/source-identity) b (si/source-identity)]
     (is (= a b))

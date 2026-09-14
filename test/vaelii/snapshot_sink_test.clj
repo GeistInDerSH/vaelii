@@ -358,3 +358,21 @@
               (is (thrown? Exception (dorun (drop 4 s))) "the second does not")
               (frames/close-frames! s)))))                   ; closed under the failure; a no-op
       (finally (rm-rf! dir)))))
+
+;;; ── the record hash across builds ─────────────────────────────────────
+
+;; An index dump carries the fingerprint of the records it was derived from, and the reader
+;; recomputes that fingerprint with the running build.  The two digests are literals, so a
+;; change to what `record-hash` reads of a rule or of a negative literal fails here instead
+;; of discarding the index of every dump already written.
+(deftest a-record-hash-is-the-same-in-every-build
+  (let [kb   (v/open-kb {:backend :memory :space (gensym "recordhash")})
+        recs (:records kb)
+        rule (p/get-sentex recs (v/assert kb '(set/forwardRule
+                                               (implies (and (likes ?x ?y) (not (sells ?x ?y)))
+                                                        (keeps ?x ?y)))
+                                          'CxTest))
+        lit  (p/get-sentex recs (v/assert kb '(not (sells Muffet Tom)) 'CxTest))]
+    (is (= 4125258215038561605 (fp/record-hash 1 rule)) "a rule hashes its implies form")
+    (is (= 3244354055351357446 (fp/record-hash 1 lit))
+        "a negative literal hashes its sentence and its sign")))

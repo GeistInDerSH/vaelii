@@ -186,6 +186,7 @@ need the QCN/temporal reasoners, `hot-records` needs a disk-backed store.
 | Closure neighbours `:closure-neighbours` | neighbour sets | — | structural |
 | Pinned values `:pinned-values` | resident values | — | structural |
 | Justification dedup `:justification-dedup` | conclusions | — | structural |
+| Source parses `:source-parses` | source files | 1024 | wholesale clear; an entry is re-read when its file's modification time or length changes |
 
-The units do not sum: eighteen rows counting eighteen different things. A total across
+The units do not sum: nineteen rows counting nineteen different things. A total across
 them is a number of nothing.

@@ -437,7 +437,7 @@
         recs    (:records kb)]
     (some (fn [h]
             (when-let [sx (p/get-sentex recs h)]
-              (res/retired-for? kb visible merged? (:sentence sx))))
+              (res/retired-for? kb visible merged? (sx/sentence-of sx))))
           supporters)))
 
 (defn- placements

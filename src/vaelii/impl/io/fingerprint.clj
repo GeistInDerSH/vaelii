@@ -15,8 +15,9 @@
   not the order the writer walked — and *additive* rather than xor, so two identical
   records cannot cancel each other out.
 
-  **What is hashed is what the index is a function of**: the handle, `:sentence`,
-  `:context`, the sign (`sentex/polarity`), and a rule's `:antecedent` / `:consequent`.  `sentex/path`,
+  **What is hashed is what the index is a function of**: the handle, the sentence
+  (`sentex/sentence-of`, which is a rule's `implies` form), `:context`, the sign
+  (`sentex/polarity`), and a rule's `:antecedent` / `:consequent`.  `sentex/path`,
   `kv/root-keys`, `kv/sentex-terms` and the rule index read exactly those, and the handle
   because a posting *is* a set of handles — the same content at a different handle makes
   every posting naming it wrong.  Deliberately **not** hashed: `:strength`, `:varmap`,
@@ -58,7 +59,7 @@
   ^long [^long h sx]
   (-> fnv-offset
       (mix h)
-      (mix (hash (:sentence sx)))
+      (mix (hash (sx/sentence-of sx)))
       (mix (hash (:context sx)))
       (mix (hash (sx/polarity sx)))
       (mix (hash (:antecedent sx)))

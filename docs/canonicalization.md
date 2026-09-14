@@ -172,9 +172,10 @@ of known-true content cannot retire it ([nmtms.md](nmtms.md)).
 
 ## Polycanonicalization: one rule written, several stored
 
-The connectives above canonicalize **into** the record — `not` becomes a polarity,
-`implies` and `and` become the antecedent vector and the consequent, a `set/*Rule`
-wrapper becomes a field. Two of them cannot, because what they say is not about one
+The connectives above canonicalize **into** the record — `implies` and `and` become the
+antecedent vector and the consequent, a `set/*Rule` wrapper becomes a field, and a `not`
+stays as the sentence's one head, which is the literal's sign. Two of them cannot,
+because what they say is not about one
 rule: a rule that concludes a **conjunction** makes two claims, and a rule whose
 antecedent **disjoins** fires for two reasons. Both are *polycanonicalized* — the one
 sentence the author wrote is stored as several rules, and the connective is gone before

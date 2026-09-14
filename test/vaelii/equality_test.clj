@@ -261,6 +261,20 @@
         (is (= #{Pref} (set (map #(get % '?who)
                                  (v/ask kb (list bornIn '?who Chicago) CxName)))))))))
 
+;; A merge retires a spelling for the contexts below it, and a rule naming that spelling
+;; is not read there, as a fact naming it is not.
+(tu/deftest-kb a-rule-naming-a-retired-spelling-is-hidden-below-the-merge
+  (tu/with-terms [bornIn knows CxUpper CxLower]
+    (tu/with-terms [Pref Dep]
+      (v/assert kb (list 'genlCx CxLower CxUpper) 'CxUniverse)
+      (let [rule (list 'implies (list bornIn '?x Dep) (list knows '?x Dep))]
+        (v/assert kb rule CxUpper)
+        (v/assert kb (list 'rewriteOf Pref Dep) CxLower)
+        (testing "the context that states the rule, above the merge, reads it"
+          (is (= 1 (count (v/sentexes-matching kb rule CxUpper)))))
+        (testing "a context below the merge has retired Dep, and does not read the rule"
+          (is (empty? (v/sentexes-matching kb rule CxLower))))))))
+
 ;; DECISION (What a merge does — Migrate): "Dedup falls out: when the rewritten form
 ;; already exists, find-or-create returns that handle and it simply gains a second
 ;; justification."  One handle with two supports, never two handles — this is the

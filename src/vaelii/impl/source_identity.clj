@@ -53,11 +53,21 @@
   A library loaded from a directory rather than a jar contributes its namespace or class
   name.  JDK classes contribute nothing.
 
-  Nothing here memoizes: a REPL can change a source file between two calls, and the
-  digest describes the files as they stand at the call."
+  ## The parse memo
+
+  The parse of a file — its forms digest and its edges — is memoized per file, in the
+  `:source-parses` cache.  Every call takes each file's stat, its modification time and
+  length.  A file whose stat is unchanged since its last read is not read again; any other
+  file is read and its bytes hashed, and parsed only when the SHA-256 of its bytes
+  changed.  An edit that leaves both the modification time and the length unchanged can
+  land only within the file system's timestamp resolution of the read before it, so a
+  file modified within `stat-window-ms` before its read is read again at the next call.
+  The digest therefore describes the files as they stand at the call, and an edit made at
+  a REPL between two calls reaches it."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.walk :as walk])
+            [clojure.walk :as walk]
+            [vaelii.impl.caches :as caches])
   (:import [java.io File PushbackReader StringReader]
            [java.net URL]
            [java.nio.file Files]
@@ -246,17 +256,25 @@
      forms)
     @acc))
 
-(defn- references
-  "`{:namespaces #{…} :libraries #{…}}` — the in-scope namespaces `forms` reaches and the
-  external namespaces and classes it requires or imports."
+(defn- edges
+  "`{:reqs [ns …] :classes [cls …] :quoted #{ns …}}` — the namespaces `forms` requires,
+  the classes it imports, and the in-scope namespaces a quoted symbol in it names.  Read
+  from the forms alone, with no classpath lookup, so the parse memo can hold it."
   [forms]
-  (let [clauses (ns-clauses forms)
-        reqs    (for [c clauses :when (#{:require :use} (first c))
-                      spec (rest c) n (libspec-namespaces spec)] n)
-        classes (for [c clauses :when (= :import (first c))
-                      spec (rest c) cls (import-classes spec)] cls)
-        by-cls  (map (fn [c] [c (class-namespace c)]) classes)]
-    {:namespaces (into (quoted-namespaces forms)
+  (let [clauses (ns-clauses forms)]
+    {:reqs    (vec (for [c clauses :when (#{:require :use} (first c))
+                         spec (rest c) n (libspec-namespaces spec)] n))
+     :classes (vec (for [c clauses :when (= :import (first c))
+                         spec (rest c) cls (import-classes spec)] cls))
+     :quoted  (quoted-namespaces forms)}))
+
+(defn- references
+  "`{:namespaces #{…} :libraries #{…}}` — the in-scope namespaces a file's `edges` reach
+  and the external namespaces and classes it requires or imports.  Resolves each imported
+  class against the classpath at the call."
+  [{:keys [reqs classes quoted]}]
+  (let [by-cls (map (fn [c] [c (class-namespace c)]) classes)]
+    {:namespaces (into quoted
                        (concat (filter in-scope? reqs) (keep second by-cls)))
      :libraries  (into #{}
                        (concat (map (fn [n] [:ns n]) (remove in-scope? reqs))
@@ -296,6 +314,81 @@
         (or (get @cache k)
             (let [b (container-bytes u stem)] (vswap! cache assoc k b) b))))))
 
+;; ---- the parse memo ---------------------------------------------------------
+
+(def ^:private parse-memo-limit
+  "Parsed files the memo holds before it is cleared wholesale.  The closure is 111
+  namespaces today, so the bound leaves room for the versions a REPL session's edits add."
+  1024)
+
+(def ^:private stat-window-ms
+  "How long after a file's modification time a read must happen for the file's stat to
+  stand in for its bytes at the next call.  A file system records a modification time at a
+  resolution of up to 2 s, so an edit landing within 2 s of the read before it can leave
+  both the time and the length unchanged."
+  2000)
+
+;; `{url-string {:stat [modified length] :read-at ms :sha hex :bytes forms-digest
+;; :edges edges}}`, one entry per source file.
+(def ^:private parsed (atom {}))
+
+(defn- url-bytes ^bytes [^URL url]
+  (with-open [in (.openStream url)] (.readAllBytes in)))
+
+(defn- file-stat
+  "`[modified-ms length]` of the file `url` loads from — the jar itself for a `jar:` URL —
+  or nil for any other protocol."
+  [^URL url]
+  (when-let [^File f (case (.getProtocol url)
+                       "file" (io/file (.toURI url))
+                       "jar"  (let [p (.getPath url)]
+                                (io/file (.toURI (URL. (subs p 0 (.indexOf p "!"))))))
+                       nil)]
+    [(.lastModified f) (.length f)]))
+
+(defn- parse-source
+  "`{:bytes forms-digest :edges edges …}` for the source file at `url`.
+
+  The memo entry stands without a read when the file's stat equals the stat taken before
+  the entry's read, and the file's modification time is more than `stat-window-ms` older
+  than that read.  Otherwise this reads the bytes and hashes them, and parses the forms
+  only when the SHA-256 differs from the entry's."
+  [^URL url]
+  (let [k  (str url)
+        st (file-stat url)
+        e  (get @parsed k)]
+    (if (and e st (= st (:stat e))
+             (< (long (first st)) (- (long (:read-at e)) (long stat-window-ms))))
+      e
+      (let [read-at (System/currentTimeMillis)
+            raw     (url-bytes url)
+            sha     (hex (.digest (doto (sha256) (.update raw))))
+            e       (assoc (if (= sha (:sha e))
+                             e
+                             (let [forms (read-forms (String. raw "UTF-8"))]
+                               {:sha sha :bytes (forms-bytes forms) :edges (edges forms)}))
+                           :stat st :read-at read-at)]
+        (when (and (not (contains? @parsed k))
+                   (>= (count @parsed) (long (caches/limit-of :source-parses parse-memo-limit))))
+          (reset! parsed {}))
+        (swap! parsed assoc k e)
+        e))))
+
+(caches/register-cache
+ {:cache    :source-parses
+  :label    "Source parses"
+  :scope    :process
+  :unit     "source files"
+  :limit    (caches/limit-thunk :source-parses parse-memo-limit)
+  :counters nil
+  :note     (str "Each engine source file's forms digest and edges, keyed on the SHA-256 of "
+                 "its bytes, so the source identity parses only a file whose bytes it has "
+                 "not parsed before. Past the limit it is cleared wholesale.")
+  :read     (fn [_] {:entries (count @parsed)})
+  :trim     (fn [_ target] (caches/trim-map! parsed target))})
+
+;; ---- the walk ---------------------------------------------------------------
+
 (defn- walk-closure
   "`{ns-sym {:bytes digest :libraries #{…}}}` for every namespace the closure reaches.  A
   namespace with source contributes its forms digest and its edges; one with only compiled
@@ -311,9 +404,9 @@
             (recur out todo)
 
             (source-url n)
-            (let [forms (read-forms (slurp (source-url n)))
-                  {:keys [namespaces libraries]} (references forms)]
-              (recur (assoc out n {:bytes (forms-bytes forms) :libraries libraries})
+            (let [{:keys [bytes edges]} (parse-source (source-url n))
+                  {:keys [namespaces libraries]} (references edges)]
+              (recur (assoc out n {:bytes bytes :libraries libraries})
                      (into todo (remove #(contains? out %)) namespaces)))
 
             :else

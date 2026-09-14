@@ -180,7 +180,7 @@
         merged?  (tax/merged-term-pred (:taxonomy kb))
         visible  (delay (res/visible-supporter-fn kb context))
         retired? (if (and merged? (symbol? context) (not (pvar? context)))
-                   #(res/retired-for? kb visible merged? (:sentence %))
+                   #(res/retired-for? kb visible merged? (sx/sentence-of %))
                    (constantly false))]
     (->> (reads/as-stored-with-functor ix pred)
          (keep (fn [h]

@@ -4198,8 +4198,8 @@
 
 (def ^:private demo-watched
   "The five sentences the walkthrough touches, in the order they make sense in: the two
-  the reader asserts, the conclusion under test, the thing resting on it, and the
-  positive claim a penguin carries.  All five are rendered at every step, because the
+  the reader asserts, the conclusion under test, what the capability hierarchy answers
+  from it, and the positive claim a penguin carries.  All five are rendered at every step, because the
   cascade is the part worth seeing — the conclusion does not go alone, and the KB does
   not merely fail to conclude flight, it concludes flightlessness, which is a different
   statement."
@@ -4209,8 +4209,9 @@
     :note "asserted — step 2, taken back in step 3"}
    {:form (demo-cap 'flying)
     :note "derived — the conclusion under test"}
-   {:form (demo-cap 'travelling)
-    :note "derived from the flight — it goes when that goes"}
+   {:form      (demo-cap 'travelling)
+    :answered? true
+    :note      "answered through the capability hierarchy, never stored — it goes when the flight goes"}
    {:form (list 'not (demo-cap 'flying))
     :note "derived from (penguin Pingu) — a positive claim, not the absence of one"}])
 
@@ -4306,15 +4307,22 @@
   "One watched sentence and what the KB says about it right now: the record and its
   belief pill when it is stored, and plainly *not stored* when it is not — which on this
   page is half the point, the interesting transitions deleting records rather than
-  relabelling them."
-  [{:keys [kb sandbox] :as view} {:keys [form note]}]
-  (let [h (when sandbox (v/handle-of kb form sandbox))
-        s (when h (v/sentex kb h))]
+  relabelling them.  A row marked `:answered?` names a sentence the KB answers at
+  retrieval and never stores, so it shows what `ask?` answers instead: *answerable* or
+  *unanswerable*."
+  [{:keys [kb sandbox] :as view} {:keys [form note answered?]}]
+  (let [live? (boolean (and sandbox @(:sandbox-live? view)))
+        h     (when (and sandbox (not answered?)) (v/handle-of kb form sandbox))
+        s     (when h (v/sentex kb h))]
     [:li.demo-fact
-     (if s
-       (list (sentex-ref view s) " " (state-tag view h))
-       (list [:span.demo-absent (render-form view form)] " "
-             [:span.tag.tag-out "not stored"]))
+     (cond
+       answered? (list [:span.demo-absent (render-form view form)] " "
+                       (if (and live? (v/ask? kb form sandbox))
+                         [:span.tag.tag-in "answerable"]
+                         [:span.tag.tag-out "unanswerable"]))
+       s         (list (sentex-ref view s) " " (state-tag view h))
+       :else     (list [:span.demo-absent (render-form view form)] " "
+                       [:span.tag.tag-out "not stored"]))
      [:span.demo-note note]]))
 
 (defn- demo-step-form

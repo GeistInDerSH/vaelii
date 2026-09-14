@@ -371,8 +371,11 @@ Three process rules follow:
   answer is "nothing: no working caller exists", because that sentence is the
   class-2 claim made checkable.
 - **At release time the changelog is closed against `git log --oneline
-  <last-tag>..`**: every `fix(`/`feat(` commit has an entry, or the release notes
-  a reason it needs none (a fix to code the last release never shipped, say). An
+  <last-tag>..`**: every `feat(`, `fix(`, `perf(` and behaviour-moving `build(`
+  commit has an entry, including functionality no public entry point reaches yet —
+  an engine-internal subsystem, developer tooling, a bench or a lint check. An entry
+  postponed to the release where the functionality becomes caller-visible is one
+  no release writes. The one exemption is a fix to code no release has shipped. An
   entry written at commit time is cheap; one reconstructed at release time is
   guesswork.
 - **Every Breaking and every Refusal entry also carries a `*Breaks:*` line, and

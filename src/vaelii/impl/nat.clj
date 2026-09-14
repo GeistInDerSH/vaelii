@@ -844,7 +844,7 @@
   unrelated named it."
   [sentexes]
   (into #{} (mapcat (fn [sx]
-                      (cond-> (reified-nats-in (:sentence sx))
+                      (cond-> (reified-nats-in (sx/sentence-of sx))
                         (reified-context-symbol? (:context sx)) (conj (:context sx)))))
         sentexes))
 

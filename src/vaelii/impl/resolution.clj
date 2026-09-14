@@ -1840,7 +1840,7 @@
     (if-not (and merged? (symbol? view-context) (not (sx/variable? view-context)))
       matches
       (let [visible (delay (visible-supporter-fn kb view-context))]
-        (remove (fn [m] (retired-for? kb visible merged? (:sentence (nth m 2)))) matches)))))
+        (remove (fn [m] (retired-for? kb visible merged? (sx/sentence-of (nth m 2)))) matches)))))
 
 (defn- visible-matches
   "The retrieval both of `matches-visible`'s arities perform: the chosen path, then the
