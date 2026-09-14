@@ -38,7 +38,11 @@
   [sentence]
   (sx/implies? sentence))
 
-(defn rule? [sentex] (rule-sentence? (:sentence sentex)))
+(defn rule?
+  "Is `sentex` a rule — a record with an `:antecedent`?  The field is the discriminant
+  everywhere; a rule record holds no sentence to test."
+  [sentex]
+  (some? (:antecedent sentex)))
 
 (defn antecedents
   "The antecedent patterns of a rule sentence (unwrapping a leading `and`)."
@@ -52,9 +56,6 @@
   One spelling for the whole codebase — see `sentex/rule-sentence`."
   [antecedents consequent]
   (sx/rule-sentence antecedents consequent))
-
-(defn parse [sentence]
-  {:antecedents (antecedents sentence) :consequent (consequent sentence)})
 
 (defn antecedent-key
   "The antecedent-index key an antecedent `literal` files under: its functor, or
@@ -75,12 +76,18 @@
         (if (symbol? g) [:not g] f))
       f)))
 
+(defn antecedent-keys
+  "`antecedent-key` of each of `antes` — a rule record's `:antecedent`, or the antecedents
+  `antecedent-predicates` splits off a sentence."
+  [antes]
+  (keep antecedent-key antes))
+
 (defn antecedent-predicates
   "The antecedent-index keys of a rule `sentence` — each antecedent's `antecedent-key`.
   What `p/index-rule` files a rule under and what the `:rule-antecedents` roster counts;
   a positive literal's key is its predicate, a negated one's is `[:not pred]`."
   [sentence]
-  (keep antecedent-key (antecedents sentence)))
+  (antecedent-keys (antecedents sentence)))
 
 (defn dependency-predicates
   "The antecedent keys of a rule `sentence` as **`consequent-predicate` keys** — what a
@@ -131,6 +138,16 @@
               (keys roster)))
       (tax/genls-global tax k))))
 
+(defn consequent-key
+  "`consequent-predicate` of a rule whose consequent pattern is `c0`, read off the
+  consequent itself — which a rule record holds as its `:consequent`."
+  [c0]
+  (let [c (let [inner (peek (sx/peel-rule-wrapper c0))]
+            (if (sx/implies? inner) inner c0))]
+    (if (and (sequential? c) (= sx/ist-functor (first c)))
+      (nm/functor (nth c 2))
+      (nm/functor c))))
+
 (defn consequent-predicate
   "The predicate a rule concludes.  A consequent of the form `(ist Ctx S)` (place S
   into context Ctx) is indexed by S's predicate, not by ist.
@@ -142,12 +159,7 @@
   its stamped rule happened to be written, and the single cell that answers *which rules
   are generators* would answer for some of them."
   [sentence]
-  (let [c0 (consequent sentence)
-        c  (let [inner (peek (sx/peel-rule-wrapper c0))]
-             (if (sx/implies? inner) inner c0))]
-    (if (and (sequential? c) (= sx/ist-functor (first c)))
-      (nm/functor (nth c 2))
-      (nm/functor c))))
+  (consequent-key (consequent sentence)))
 
 ;; ---- virtual rule-direction predicates ----------------------------------
 ;; Wrapping a rule sets its inference direction on assert.  Default (a bare implies) is
@@ -226,7 +238,7 @@
   "The `(unknown S)` antecedent literals of a stored rule — its negation-as-failure
   conditions."
   [sentex]
-  (naf-antecedents-of (:sentence sentex)))
+  (filter sx/unknown? (:antecedent sentex)))
 
 (defn has-naf?
   "Does this rule carry any `unknown` antecedent?"
@@ -257,7 +269,7 @@
   which read the equality closure and the `indeterminate_term` category rather than a fact
   the justification names."
   [sentex]
-  (filter #(= 'different (nm/functor %)) (antecedents (:sentence sentex))))
+  (filter #(= 'different (nm/functor %)) (:antecedent sentex)))
 
 (defn has-different?
   "Does this rule carry a `(different …)` antecedent?"
@@ -330,7 +342,7 @@
   condition.  The exception analogue is `exception-predicates`; both feed the same
   `[:exception-index …]` index."
   [sentex]
-  (naf-predicates-of (:sentence sentex)))
+  (keep nm/functor (mapcat naf-queries-of (naf-antecedents sentex))))
 
 (defn naf-queries
   "The inner query literals of a rule's `unknown` antecedents (each conjunct, unwrapped
@@ -357,7 +369,7 @@
 (defn aggregate-antecedents
   "The aggregate antecedent literals of a stored rule."
   [sentex]
-  (aggregate-antecedents-of (:sentence sentex)))
+  (filter sx/aggregate? (:antecedent sentex)))
 
 (defn has-aggregate?
   "Does this rule carry any aggregate antecedent?"
@@ -391,7 +403,7 @@
 (defn aggregate-predicates
   "The predicates a stored rule's aggregate bodies mention."
   [sentex]
-  (aggregate-predicates-of (:sentence sentex)))
+  (watched-predicates (aggregate-antecedents sentex)))
 
 ;; ---- a closed extent: `(not (P …))` read as negation as failure ----------
 ;; `(closed_extent_predicate P)` is a context-scoped grant that P's **believed** extent is
@@ -555,7 +567,7 @@
 (defn post-join-antecedents
   "`post-join-literals` over a stored rule's antecedents."
   [sentex]
-  (post-join-literals (vec (antecedents (:sentence sentex)))))
+  (post-join-literals (vec (:antecedent sentex))))
 
 (def ^:private direction-wrapper
   "The surface `set/*Rule` wrapper each direction rewraps and exports to.  `:backward` is
@@ -618,6 +630,49 @@
   so `rewrap` restores the authored form on export."
   (into {} (map (fn [[w mc]] [mc w])) cardinality-wrappers))
 
+;; ---- minimize objectives and soft-constraint priorities ------------------
+;; `asp/minimize` and a priority-tagged `set/softConstraint` are the answer-set
+;; *objective* surface — the weak-constraint counterpart to the hard/soft nogoods.  Like
+;; the cardinality bounds they normalize into an internal `set/softConstraint` whose
+;; consequent MARKER carries the extra operands (a priority level, and for a minimize the
+;; per-head weight variable), so nothing downstream needs a new rule arm: `solve-context`
+;; reads the marker back (`soft-cost-of`), and `edge/translate` already keys a minimize's
+;; objective level off the nogood's `:priority` and its per-literal weight off `[[v w]]`.
+;; A soft with no priority stays level-1 (`:priority 1`), unit weight, as every soft was
+;; before.  Distinct priorities become distinct lexicographic minimize levels, so a
+;; lower-priority tiebreak breaks ties among the higher objective's optima without the
+;; solver churning a plateau of equal-cost models (docs/solving.md).
+
+(def minimize-marker
+  "The consequent-marker functor a normalized `asp/minimize` carries:
+  `(minimizeCost <priority> <weight-var>)`."
+  'minimizeCost)
+
+(def soft-priority-marker
+  "The consequent-marker functor a normalized priority-tagged `set/softConstraint`
+  carries: `(softPriority <priority> <the authored consequent>)`."
+  'softPriority)
+
+(def minimize-wrapper 'asp/minimize)
+
+(def ^:private priority-constraint-wrappers
+  "The constraint wrappers a leading-integer priority may tag."
+  '#{set/softConstraint set/hardConstraint})
+
+(defn minimize-surface?
+  "Is `sentence` a `(asp/minimize priority ?weight body)` surface form?"
+  [sentence]
+  (boolean (and (sequential? sentence) (seq sentence)
+                (= minimize-wrapper (first sentence)))))
+
+(defn soft-priority-surface?
+  "Is `sentence` a priority-tagged constraint wrapper — a leading positive integer before
+  the rule, `(set/softConstraint P (implies …))`?"
+  [sentence]
+  (boolean (and (sequential? sentence) (= 3 (count sentence))
+                (contains? priority-constraint-wrappers (first sentence))
+                (integer? (second sentence)))))
+
 (defn cardinality-surface?
   "Is `sentence` a `(asp/atMost …)` / `(asp/atLeast …)` surface form (or a soft twin)?"
   [sentence]
@@ -659,6 +714,126 @@
       (list (get {:hard 'set/hardConstraint :soft 'set/softConstraint} klass)
             (sx/rule-sentence [pattern] (list marker k v))))))
 
+(defn normalize-soft-priority
+  "Rewrite a priority-tagged `(set/softConstraint P (implies body C))` into the internal
+  `(set/softConstraint (implies body (softPriority P C)))`, moving the priority level onto
+  the consequent marker so the split, the checks, and the store see an ordinary soft
+  constraint.  The identity on anything else.
+
+  Refuses a malformed form here, before storage: the priority a positive integer, the
+  wrapper `set/softConstraint` (a hard constraint is an integrity constraint, never
+  minimized, so a priority on it is meaningless), and the body a rule."
+  [sentence]
+  (if-not (soft-priority-surface? sentence)
+    sentence
+    (let [[wrapper priority inner] sentence]
+      (when-not (= 'set/softConstraint wrapper)
+        (throw (ex-info (str "a priority applies only to a minimized soft constraint; "
+                             (pr-str wrapper) " is a hard integrity constraint with no "
+                             "objective level: " (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence})))
+      (when-not (pos-int? priority)
+        (throw (ex-info (str "a soft constraint's priority must be a positive integer; got "
+                             (pr-str priority) " in " (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence :priority priority})))
+      (when-not (and (sx/implies? inner) (= 3 (count inner)))
+        (throw (ex-info (str "a priority-tagged soft constraint wraps a rule; got "
+                             (pr-str inner) " in " (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence})))
+      (list 'set/softConstraint
+            (list 'implies (second inner)
+                  (list soft-priority-marker priority (nth inner 2)))))))
+
+(defn normalize-minimize
+  "Rewrite `(asp/minimize priority ?weight body)` into the internal soft constraint
+  `(set/softConstraint (implies body (minimizeCost priority ?weight)))` — a soft whose
+  choice-head body is penalized by the data weight `?weight` at `priority`, so the
+  objective at that level sums `?weight` over every chosen head.  `body` names a choice
+  head and binds `?weight` off a background fact — the weak-constraint idiom
+  `#minimize{ W@P, head : head-facts, weight-fact }`.  The identity on anything else.
+
+  Refuses a malformed form: the priority a positive integer, `?weight` a variable the body
+  binds, `body` a literal or conjunction."
+  [sentence]
+  (if-not (minimize-surface? sentence)
+    sentence
+    (let [[_ priority w body] sentence]
+      (when-not (= 4 (count sentence))
+        (throw (ex-info (str "a minimize is (asp/minimize priority ?weight body); got "
+                             (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence})))
+      (when-not (pos-int? priority)
+        (throw (ex-info (str "a minimize's priority must be a positive integer; got "
+                             (pr-str priority) " in " (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence :priority priority})))
+      (when-not (sx/variable? w)
+        (throw (ex-info (str "a minimize's weight slot must be a variable; got " (pr-str w)
+                             " in " (pr-str sentence))
+                        {:type :not-well-formed :sentence sentence :weight w})))
+      (when-not (and (sequential? body)
+                     (some #{w} (filter sx/variable? (tree-seq sequential? seq body))))
+        (throw (ex-info (str "a minimize's weight variable " (pr-str w) " must appear in "
+                             "the body " (pr-str body))
+                        {:type :not-well-formed :sentence sentence :weight w :body body})))
+      (list 'set/softConstraint
+            (list 'implies body (list minimize-marker priority w))))))
+
+(def internal-markers
+  "The consequent-marker functors the answer-set surfaces normalize into.  No authored
+  sentence spells one: `refuse-internal-marker` refuses a constraint rule that does."
+  (conj cardinality-markers minimize-marker soft-priority-marker))
+
+(def ^:private internal-marker-surface
+  "The surface form to write in place of each internal marker, for the refusal message."
+  '{cardAtMost   "(asp/atMost k ?counted pattern) or (asp/softAtMost …)"
+    cardAtLeast  "(asp/atLeast k ?counted pattern) or (asp/softAtLeast …)"
+    minimizeCost "(asp/minimize priority ?weight body)"
+    softPriority "(set/softConstraint priority (implies body marker))"})
+
+(defn- authored-constraint-consequents
+  "The consequent literals of the rule a constraint wrapper holds, as written: through any
+  direction, default or assumption wrapper around the constraint wrapper and past a leading
+  priority inside it, one per conjunct of a conjunctive consequent.  Empty for every other
+  sentence."
+  [sentence]
+  (let [peel? (fn [s] (and (sequential? s) (= 2 (count s))
+                           (let [h (first s)]
+                             (or (contains? sx/rule-direction-wrappers h)
+                                 (= sx/default-rule-wrapper h)
+                                 (= sx/assumption-rule-wrapper h)))))
+        s     (loop [s sentence] (if (peel? s) (recur (second s)) s))]
+    (if-not (and (sequential? s) (seq s) (contains? sx/constraint-rule-wrappers (first s)))
+      []
+      (let [inner (last s)
+            c     (when (and (sx/implies? inner) (= 3 (count inner))) (nth inner 2))]
+        (if (and (sequential? c) (= 'and (first c))) (rest c) (some-> c vector))))))
+
+(defn refuse-internal-marker
+  "Throw `:not-well-formed` when a constraint rule's authored consequent is one of the
+  `internal-markers`; return `sentence` unchanged otherwise.  A hand-written marker skips
+  the operand checks its surface form runs, and the solve reads each operand as a count or
+  an objective level, so a symbol operand such as `(cardAtMost ?a ?c)` would reach
+  arithmetic and throw a bare `ClassCastException` out of `do/label`."
+  [sentence]
+  (if-let [m (some #(when (and (sequential? %) (contains? internal-markers (first %))) %)
+                   (authored-constraint-consequents sentence))]
+    (throw (ex-info (str (pr-str (first m)) " is the internal marker a solve surface "
+                         "normalizes into, not an authored consequent; write "
+                         (internal-marker-surface (first m)) " instead: " (pr-str sentence))
+                    {:type :not-well-formed :sentence sentence :marker (first m)}))
+    sentence))
+
+(defn normalize-solve-surface
+  "Rewrite the answer-set surface forms — cardinality bounds, priority-tagged soft
+  constraints, and minimize objectives — into their internal constraint-rule forms, so
+  the split, the checks, and the store all see ordinary constraint rules.  Each rewrite is
+  the identity off its own surface, and the three surfaces are disjoint, so the order does
+  not matter; the identity on every other sentence.  A constraint rule that spells an
+  internal marker itself is refused first (`refuse-internal-marker`)."
+  [sentence]
+  (-> sentence refuse-internal-marker
+      normalize-cardinality normalize-soft-priority normalize-minimize))
+
 (defn cardinality-of
   "The cardinality bound a stored constraint rule expresses — `{:op :at-most|:at-least
   :k int :counted ?v}` — read off the consequent marker `(cardAtMost k ?v)` /
@@ -669,6 +844,27 @@
       {:op      (if (= 'cardAtMost (first c)) :at-most :at-least)
        :k       (second c)
        :counted (nth c 2)})))
+
+(defn soft-cost-of
+  "Read the objective level and per-head weight a **ground** soft-constraint marker
+  carries, for `solve-context` to put on the nogood — the counterpart to `cardinality-of`
+  for the minimize/priority surface:
+
+    `(minimizeCost p w)` → `{:priority p :weight w :marker marker}` — a minimize term over
+                           the chosen head, weighted `w` at level `p`;
+    `(softPriority p m)` → `{:priority p :marker m}` — the authored soft `m`, at level `p`,
+                           unit weight;
+    anything else        → `{:priority 1 :marker marker}` — an ordinary soft, level 1.
+
+  `:marker` is the value to name the nogood by (the authored one, unwrapped)."
+  [marker]
+  (cond
+    (and (sequential? marker) (= minimize-marker (first marker)))
+    {:priority (nth marker 1) :weight (nth marker 2) :marker marker}
+    (and (sequential? marker) (= soft-priority-marker (first marker)))
+    {:priority (nth marker 1) :marker (nth marker 2)}
+    :else
+    {:priority 1 :marker marker}))
 
 ;; ---- polycanonicalization: split a conjunctive consequent ----------------
 
@@ -691,10 +887,23 @@
   `cardAtLeast` marker, so `(asp/atMost k ?v pattern)` comes back rather than the rule it
   was normalized to (`normalize-cardinality`)."
   [sentence direction defeasible assumption constraint]
-  (let [conseq (when (sx/implies? sentence) (consequent sentence))]
-    (if (and constraint (sequential? conseq) (contains? cardinality-markers (first conseq)))
+  (let [conseq (when (sx/implies? sentence) (consequent sentence))
+        cf     (when (sequential? conseq) (first conseq))]
+    (cond
+      ;; a minimize restores its authored `(asp/minimize p ?w body)` — the whole
+      ;; antecedent form is the body, conjunctive or not
+      (and constraint (= minimize-marker cf))
+      (let [[_ p w] conseq]
+        (list minimize-wrapper p w (second sentence)))
+      ;; a priority-tagged soft restores `(set/softConstraint p (implies body C))`
+      (and constraint (= soft-priority-marker cf))
+      (let [[_ p m] conseq]
+        (list 'set/softConstraint p (list 'implies (second sentence) m)))
+      ;; a cardinality bound restores its authored surface (`normalize-cardinality`)
+      (and constraint (contains? cardinality-markers cf))
       (let [[marker k v] conseq]
         (list (cardinality-rewrap [marker constraint]) k v (first (antecedents sentence))))
+      :else
       (cond-> sentence
         defeasible      (->> (list sx/default-rule-wrapper))
         assumption      (->> (list sx/assumption-rule-wrapper))
@@ -1369,7 +1578,7 @@
   One spelling for all three writers — `special/index-rule-sentex`, its unindex twin, and
   `reindex/index-rule-entry` — so a rebuilt index files the key a live one does."
   [rule-sentex]
-  (let [c (consequent-predicate (:sentence rule-sentex))]
+  (let [c (consequent-key (:consequent rule-sentex))]
     (if (and (sx/variable? c) (not= :inert (:direction rule-sentex)))
       p/var-consequent-key
       c)))

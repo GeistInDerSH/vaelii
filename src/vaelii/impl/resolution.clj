@@ -284,7 +284,7 @@
               ;; Ungated, unlike the cost refinements below: `*arg-root-retrieval*` false is
               ;; meant to give the trie as a *reference*, and for this shape the trie has no
               ;; answer to be a reference for.
-              (and (= :negative (:polarity pat)) (not (sx/ground-term? body)))
+              (and (sx/negative? pat) (not (sx/ground-term? body)))
               (if (or pred (seq ground)) :negative-roots :negative-fan)
 
               ;; A ground argument sitting **after** a variable, which the trie can reach
@@ -298,7 +298,7 @@
               ;; The trie key linearizes the compound, so `p/lookup` narrows on its interior;
               ;; off, the functor extent is the correct fallback superset.  A variable functor
               ;; roots nothing, so it always takes the trie.
-              (and (= :positive (:polarity pat)) (some sequential? args))
+              (and (not (sx/negative? pat)) (some sequential? args))
               (if (or *structural-index* (nil? pred)) :structural :functor-extent)
 
               ;; trie: left-prefix, test, or number-only
@@ -977,6 +977,11 @@
         tms   (:tms kb)
         recs  (:records kb)
         blind? (belief-blind?)
+        ;; a rule-shaped pattern matches a stored rule's whole `implies` form, which a
+        ;; rule record does not hold, so both sides are built once here or per candidate;
+        ;; a literal pattern reads the stored `:sentence` straight, as every fact is
+        rule-pat? (some? (:antecedent pat))
+        psent (sx/sentence-of pat)
         match (fn [h]
                 (when (or blind? (jtms/in? tms h))
                   (let [stored (p/get-sentex recs h)]
@@ -991,9 +996,11 @@
                                ;; not bind ?p to `not` against a stored negation (the
                                ;; wildcard trie lookup can surface a `[:false ..]` key, but
                                ;; the truths differ).
-                               (= (:polarity pat) (:polarity stored)))
+                               (= (sx/negative? pat) (sx/negative? stored)))
                       (when-let [b (unify (:context pat) (:context stored)
-                                          (unify (:sentence pat) (:sentence stored)))]
+                                          (unify psent (if rule-pat?
+                                                         (sx/sentence-of stored)
+                                                         (:sentence stored))))]
                         [h b stored])))))
         ;; a superset of the trie hits when an argument root is tighter than a
         ;; leading-variable fan-out; the unify above filters it to the same set
@@ -1472,7 +1479,7 @@
                     (let [pat (pat-for (some-> (sx/body stored) first)
                                        (if up? (:context stored) '?ctx)
                                        rev?)]
-                      (when (= (:polarity pat) (:polarity stored))
+                      (when (= (sx/negative? pat) (sx/negative? stored))
                         (unify (:context pat) (:context stored)
                                (unify (:sentence pat) (:sentence stored))))))
             out
@@ -2231,8 +2238,8 @@
       (reduce (fn [idx h]
                 (if-let [sx (p/get-sentex (:records kb) h)]
                   (-> idx
-                      (update-in [:by-sentence (:sentence sx)] (fnil conj #{}) (:context sx))
-                      (update :functors conj (nm/functor (:sentence sx))))
+                      (update-in [:by-sentence (sx/sentence-of sx)] (fnil conj #{}) (:context sx))
+                      (update :functors conj (nm/functor (sx/sentence-of sx))))
                   idx))
               {:by-sentence {} :functors #{}}
               ds))))
@@ -2262,7 +2269,7 @@
   [kb idx sentence context]
   (boolean
    (when idx
-     (when-let [ctxs (get (:by-sentence idx) (:sentence (kb-sentex kb sentence context)))]
+     (when-let [ctxs (get (:by-sentence idx) (sx/sentence-of (kb-sentex kb sentence context)))]
        (if (or (nil? context) (sx/variable? context))
          true
          (boolean (some #(tax/sees? (:taxonomy kb) context %) ctxs)))))))

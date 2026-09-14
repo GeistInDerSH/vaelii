@@ -569,3 +569,15 @@
   "An in-memory `IndexStore` — `KvIndexStore` over a `MemoryKvBackend`."
   [opts]
   (kv/->KvIndexStore (memory-kv-backend opts)))
+
+(defn drop-index-space!
+  "Forget the derived index state held under `space` — `core/close!`'s release of the RAM
+  index a disk-backed KB derived, keyed by its directory
+  (`vaelii.impl.kb/derived-index-space`), so a process opening durable KBs in a loop does
+  not keep one derived index per directory it has finished with.  A no-op for a `space`
+  nothing holds — every pure in-RAM KB keeps its space, which is its store rather than a
+  derived cache.  Returns true when an entry was dropped."
+  [space]
+  (let [had? (contains? @index-spaces space)]
+    (swap! index-spaces dissoc space)
+    had?))

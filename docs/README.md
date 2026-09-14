@@ -96,7 +96,7 @@ rather than a compatibility claim.
 - [levels.md](levels.md) — the lookup-to-query stack: eight named levels from a raw index read to full backchaining.
 - [abduction.md](abduction.md) — `abduce`: what would have to be true for a goal to be provable, minted as a defeasible hypothesis in a scratch context — the dead-end observer, the grant that gates it, and the isolation that makes an ignored call free.
 - [exceptions.md](exceptions.md) — `exceptWhen`: how a rule states its own exception, and why the exception is never stored.
-- [naf.md](naf.md) — negation as failure: `unknown` / `thereExists`, evaluated at level 6, storing nothing (and why the JTMS `out` slot stays reserved).
+- [naf.md](naf.md) — negation as failure: `unknown` / `thereExists`, evaluated at level 6, storing nothing (and why a justification has no out-list).
 - [aggregate.md](aggregate.md) — aggregation as a query operator: the five reductions over a query's solutions, where GROUP BY comes from, and how a firing that rests on a count is maintained.
 - [belief.md](belief.md) — modal belief projection: `(believes Agent P)` answered by proving `P` in the agent's own context, `modal_predicate` / `register-modal-predicate` to open the same machinery to `knows` / `desires` / `intends`, why contradictory agents coexist without a contradiction, and the opacity of the proposition — whose merges may rewrite a term inside a belief.
 - [nmtms.md](nmtms.md) — the non-monotonic TMS: assumption strengths, soft prioritized contradictions, the `Solver` protocol.

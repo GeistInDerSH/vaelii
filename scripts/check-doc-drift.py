@@ -1219,7 +1219,8 @@ for path in clj_files():
 #
 # `vaelii.impl.taxonomy` itself is not on the roster and needs no entry: it calls its
 # own readers unqualified, and this rule is about reaching one through the alias.
-E17_GLOBAL = ("genls-global", "specs-global", "genl?-global", "context-up-global")
+E17_GLOBAL = ("genls-global", "specs-global", "genl?-global", "context-up-global",
+              "genlCx?-global")
 E17_ROSTER = {
     # The public API offers both readings, and its shorter arity IS the global one —
     # `vaelii.core/genls` documents the pair (docs/taxonomy.md).
@@ -1228,9 +1229,16 @@ E17_ROSTER = {
     ("src/vaelii/core.clj", "genl?"),
     # Assert-time refusals. A refusal is a claim about the KB and not about a vantage:
     # a cycle refused when asked from one context and allowed from another is not a
-    # refusal, it is a coin toss.
+    # refusal, it is a coin toss.  `disjoint-problems` is the deliberate exception and
+    # reads the scoped `genl?` instead — its overlap refusal is meant to agree with the
+    # scoped `(genl a b)` query, so an `except` that hides the bridging edge admits the
+    # pair (#92, docs/taxonomy.md).  The genl-relatedness guards in `disjoint?` itself
+    # stay global; only the assert-time reading moved, which is why disjoint is not here.
     ("src/vaelii/impl/wff.clj", "genl-problems"),
-    ("src/vaelii/impl/wff.clj", "disjoint-problems"),
+    # `genlCx-problems` is `genl-problems`'s twin on the context side: it refuses a
+    # `genlCx` cycle, which is a property of the whole edge set, so it reads
+    # `genlCx?-global` for the same reason `genl-problems` reads `genl?-global`.
+    ("src/vaelii/impl/wff.clj", "genlCx-problems"),
     ("src/vaelii/impl/wff.clj", "rule-edges"),
     ("src/vaelii/impl/checks.clj", "genls-problem"),
     ("src/vaelii/impl/checks.clj", "covering-genls-problem"),
@@ -1254,6 +1262,7 @@ E17_ROSTER = {
     ("src/vaelii/impl/special.clj", "arg-declared-types"),
     ("src/vaelii/impl/special.clj", "recheck-arg-inferred"),
     ("src/vaelii/impl/special.clj", "recheck-on-predicate"),
+    ("src/vaelii/impl/special.clj", "rules-watching"),
     ("src/vaelii/impl/special.clj", "recheck-genl-edge"),
     ("src/vaelii/impl/special.clj", "recheck-negated-exceptions"),
     ("src/vaelii/impl/special.clj", "subtree-sentexes"),

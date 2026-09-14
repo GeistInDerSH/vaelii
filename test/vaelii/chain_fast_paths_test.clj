@@ -9,7 +9,7 @@
   to compute exactly what its reference path computes.  This pins that claim the way
   `arg_root_retrieval_test` pins retrieval: the same knowledge chained under both
   bindings must reach the identical fixpoint, compared on **content** (sentence,
-  context, polarity, strength, belief; a justification's consequence, informant and
+  context, strength, belief; a justification's consequence, informant and
   antecedents as content), never on handles.
 
   The load is a miniature join pyramid shaped to exercise what the fast paths skip:
@@ -33,7 +33,7 @@
 
 (defn- fixpoint-content
   "The KB's whole derived state, handle-free and sorted: every stored sentex as
-  [sentence context polarity strength believed?], every justification with its
+  [sentence context strength believed?], every justification with its
   consequence, informant and antecedents mapped from handles to [sentence context]."
   [kb]
   (let [recs (:records kb)
@@ -43,7 +43,7 @@
      (sort-by pr-str
               (map (fn [id]
                      (let [s (p/get-sentex recs id)]
-                       [(:sentence s) (:context s) (:polarity s) (:strength s)
+                       [(:sentence s) (:context s) (:strength s)
                         (boolean (jtms/in? tms id))]))
                    (p/sentex-ids recs)))
      :justifications
@@ -130,12 +130,14 @@
 
 ;; ---- the dedup index's coherence transitions ----------------------------
 ;; Bare TMSes, no KB: the transitions under test are jtms-internal, and handle
-;; numbers can be spelled directly.
+;; numbers can be spelled directly.  The informant 9 stands for a stored rule, so it
+;; gets a node: a rule-handle informant is an antecedent of the justification it names.
 
 (deftest a-removal-clears-a-bound-dedup-index
   (let [tms (jtms/create-tms)]
     (jtms/add-premise tms 1 :monotonic)
     (jtms/add-premise tms 2 :monotonic)
+    (jtms/add-premise tms 9 :monotonic)
     (jtms/ensure-node tms 3 1)
     (jtms/with-dedup-cache tms
       (is (false? (jtms/has-justification? tms 9 [1 2] 3))
@@ -155,6 +157,7 @@
     (doseq [t [t1 t2]]
       (jtms/add-premise t 1 :monotonic)
       (jtms/add-premise t 2 :monotonic)
+      (jtms/add-premise t 9 :monotonic)
       (jtms/ensure-node t 3 1))
     (jtms/with-dedup-cache t1
       (is (false? (jtms/has-justification? t1 9 [1 2] 3))

@@ -125,41 +125,50 @@
       (v/retract! kb (v/handle-of kb (list 'disjoint left_t right_t) 'CxUniverse))
       (is (empty? (v/exposed-clashes kb))))))
 
-(tu/deftest-kb a-declaration-arriving-last-exposes-the-clash
-  ;; the separation route: the memberships are jointly visible all along, and the
-  ;; disjointness arriving is what makes them a clash.
-  (tu/with-terms [CxA CxC t1 t2 Pip]
+(tu/deftest-kb a-declaration-arriving-last-exposes-a-clash-only-a-descendant-sees
+  ;; the separation route: two memberships in sibling contexts, jointly visible only from
+  ;; a context below both, and the disjointness arriving is what makes them a clash.
+  ;; Neither member's own context sees the pair, so under `:refuse` nothing decides it —
+  ;; live or after a restart — and the exposure pass names where it is visible from.
+  (tu/with-terms [CxA CxB CxD t1 t2 Pip]
     (v/assert kb (list 'genl t1 'thing) 'CxUniverse)
     (v/assert kb (list 'genl t2 'thing) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
-    (v/assert kb (list t1 Pip) CxC)
-    (v/assert kb (list t2 Pip) CxA)
+    (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
+    (v/assert kb (list t1 Pip) CxA)
+    (v/assert kb (list t2 Pip) CxB)
     (is (empty? (v/violations kb)) "compatible until somebody separates them")
-    (v/assert kb (list 'disjoint t1 t2) CxC)
+    (v/assert kb (list 'disjoint t1 t2) 'CxUniverse)
     (let [vs (v/violations kb)]
       (is (= [:disjoint] (mapv :violation vs)))
-      (is (= #{CxA} (get-in (first vs) [:detail :visible-from]))))))
+      (is (= #{CxD} (get-in (first vs) [:detail :visible-from]))))
+    (is (empty? (v/contradictions kb)) "reported, not decided")))
 
-(tu/deftest-kb a-genl-edge-arriving-last-exposes-the-clash
-  ;; the closure route: the held types are not themselves separated — a subtype
-  ;; edge arriving puts one of them under a separated type, and the instances below
-  ;; its sub side are re-examined.
-  (tu/with-terms [CxA CxC dog_t canine_t cat_t Rex]
+(tu/deftest-kb a-genl-edge-arriving-last-exposes-a-clash-only-a-descendant-sees
+  ;; the closure route: the held types are not themselves separated — a subtype edge
+  ;; arriving puts one of them under a separated type, and the instances below its sub
+  ;; side are re-examined.  The two memberships sit in sibling contexts, so only the
+  ;; context below both sees the pair, and under `:refuse` it is reported, not decided.
+  (tu/with-terms [CxA CxB CxD dog_t canine_t cat_t Rex]
     (v/assert kb (list 'genl canine_t 'thing) 'CxUniverse)
     (v/assert kb (list 'genl cat_t 'thing) 'CxUniverse)
     (v/assert kb (list 'genl dog_t 'thing) 'CxUniverse)
     (v/assert kb (list 'disjoint canine_t cat_t) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
-    (v/assert kb (list dog_t Rex) CxC)
-    (v/assert kb (list cat_t Rex) CxA)
+    (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
+    (v/assert kb (list dog_t Rex) CxA)
+    (v/assert kb (list cat_t Rex) CxB)
     (is (empty? (v/violations kb)) "a dog-cat is odd but nothing separates them yet")
-    (v/assert kb (list 'genl dog_t canine_t) CxC)
+    (v/assert kb (list 'genl dog_t canine_t) 'CxUniverse)
     (let [vs (v/violations kb)]
       (is (= [:disjoint] (mapv :violation vs)))
-      (is (= #{CxA} (get-in (first vs) [:detail :visible-from])))
-      (is (= Rex (get-in (first vs) [:detail :term]))))))
+      (is (= #{CxD} (get-in (first vs) [:detail :visible-from])))
+      (is (= Rex (get-in (first vs) [:detail :term]))))
+    (is (empty? (v/contradictions kb)) "reported, not decided")))
 
 (tu/deftest-kb exposure-is-an-event-append-only-and-refiled-on-revival
   ;; the ledger contract: retracting the ingredient that exposed a clash does not
@@ -267,19 +276,23 @@
   ;; from *each*, so `(disjoint t1 t2)` implicates the terms below t1 **and** t2.
   ;; Forty terms sit below t1 alone and one below both, against a budget of four —
   ;; so a sweep of everything below either side spends the budget ten times over on
-  ;; the fillers and never reaches the clash, while the cheaper side is one term.
+  ;; the fillers and never reaches the clash, while the cheaper side is one term.  The two
+  ;; memberships sit in sibling contexts, so only the context below both sees the pair and
+  ;; the exposure sweep is the path that finds it.
   (binding [tax/*exposure-instance-budget* 4]
-    (tu/with-terms [CxA CxC t1 t2 Pip]
+    (tu/with-terms [CxA CxB CxD t1 t2 Pip]
       (v/assert kb (list 'genl t1 'thing) 'CxUniverse)
       (v/assert kb (list 'genl t2 'thing) 'CxUniverse)
-      (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-      (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
       (dotimes [_ 40]
-        (v/assert kb (list t1 (tu/tmp-ind "Filler")) CxC))
-      (v/assert kb (list t1 Pip) CxC)
-      (v/assert kb (list t2 Pip) CxA)
+        (v/assert kb (list t1 (tu/tmp-ind "Filler")) CxA))
+      (v/assert kb (list t1 Pip) CxA)
+      (v/assert kb (list t2 Pip) CxB)
       (v/clear-violations! kb)
-      (v/assert kb (list 'disjoint t1 t2) CxC)
+      (v/assert kb (list 'disjoint t1 t2) 'CxUniverse)
       (let [vs (v/violations kb)]
         (is (= [Pip] (mapv #(get-in % [:detail :term])
                            (filter #(= :disjoint (:violation %)) vs)))
@@ -325,22 +338,25 @@
   ;; `(disjoint_metatype M)` is a *unary* sentence whose argument is a symbol — the
   ;; same shape as a type membership — so the membership arm claims it unless the
   ;; declarations are matched first, and the metatype gets filed as a term holding a
-  ;; type while the clash its arrival creates goes unswept.
-  (tu/with-terms [CxA CxC animal_species dog_t cat_t Rex]
+  ;; type while the clash its arrival creates goes unswept.  The memberships sit in
+  ;; sibling contexts, so the clash is one only the context below both sees.
+  (tu/with-terms [CxA CxB CxD animal_species dog_t cat_t Rex]
     (v/assert kb (list 'genl dog_t 'thing) 'CxUniverse)
     (v/assert kb (list 'genl cat_t 'thing) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
     (v/assert kb (list animal_species dog_t) 'CxUniverse)
     (v/assert kb (list animal_species cat_t) 'CxUniverse)
-    (v/assert kb (list dog_t Rex) CxC)
-    (v/assert kb (list cat_t Rex) CxA)
+    (v/assert kb (list dog_t Rex) CxA)
+    (v/assert kb (list cat_t Rex) CxB)
     (is (empty? (v/violations kb)) "the metatype separates nothing yet")
     (v/assert kb (list 'disjoint_metatype animal_species) 'CxUniverse)
     (let [vs (filter #(= :disjoint (:violation %)) (v/violations kb))]
       (is (= [Rex] (mapv #(get-in % [:detail :term]) vs))
           "the members become pairwise disjoint, and the term holding two of them is a clash")
-      (is (= #{CxA} (get-in (first vs) [:detail :visible-from]))))))
+      (is (= #{CxD} (get-in (first vs) [:detail :visible-from]))))))
 
 (tu/deftest-kb the-narrowed-sweep-finds-what-the-complete-question-finds
   ;; The candidate rule is a *narrowing*, so the claim that matters is that it narrows
@@ -352,17 +368,21 @@
   ;; that mostly hold one side only, so a sweep below either side collects fillers while
   ;; the intersection collects the two that convict.  On OpenCyc the same comparison
   ;; over every declaration is 638 against 638, with both differences empty.
-  (tu/with-terms [CxA CxC a1_t a2_t b1_t b2_t Pip Quo]
+  ;; The memberships sit in sibling contexts, so only the context below both sees a pair
+  ;; and the settle's exposure sweep, not its deciding sweep, is the path under test.
+  (tu/with-terms [CxA CxB CxD a1_t a2_t b1_t b2_t Pip Quo]
     (doseq [t [a1_t a2_t b1_t b2_t]]
       (v/assert kb (list 'genl t 'thing) 'CxUniverse))
-    (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-    (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
-    (dotimes [_ 12] (v/assert kb (list a1_t (tu/tmp-ind "Filler")) CxC))
-    (dotimes [_ 12] (v/assert kb (list b2_t (tu/tmp-ind "Filler")) CxC))
-    (v/assert kb (list a1_t Pip) CxC)
-    (v/assert kb (list b1_t Pip) CxA)
-    (v/assert kb (list a2_t Quo) CxC)
-    (v/assert kb (list b2_t Quo) CxA)
+    (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+    (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
+    (dotimes [_ 12] (v/assert kb (list a1_t (tu/tmp-ind "Filler")) CxA))
+    (dotimes [_ 12] (v/assert kb (list b2_t (tu/tmp-ind "Filler")) CxA))
+    (v/assert kb (list a1_t Pip) CxA)
+    (v/assert kb (list b1_t Pip) CxB)
+    (v/assert kb (list a2_t Quo) CxA)
+    (v/assert kb (list b2_t Quo) CxB)
     (v/clear-violations! kb)
     (v/assert kb (list 'disjoint a1_t b1_t) 'CxUniverse)
     (v/assert kb (list 'disjoint a2_t b2_t) 'CxUniverse)
@@ -421,16 +441,18 @@
   ;; M's *other* members, so a term below T holding nothing else of M is not a
   ;; candidate.  Twenty such terms sit below dog_t against a budget of three.
   (binding [tax/*exposure-instance-budget* 3]
-    (tu/with-terms [CxA CxC animal_species dog_t cat_t Rex]
+    (tu/with-terms [CxA CxB CxD animal_species dog_t cat_t Rex]
       (v/assert kb (list 'genl dog_t 'thing) 'CxUniverse)
       (v/assert kb (list 'genl cat_t 'thing) 'CxUniverse)
-      (v/assert kb (list 'genlCx CxC 'CxUniverse) 'CxUniverse)
-      (v/assert kb (list 'genlCx CxA CxC) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxA 'CxUniverse) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxB 'CxUniverse) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxD CxA) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxD CxB) 'CxUniverse)
       (v/assert kb (list 'disjoint_metatype animal_species) 'CxUniverse)
       (v/assert kb (list animal_species cat_t) 'CxUniverse)
-      (dotimes [_ 20] (v/assert kb (list dog_t (tu/tmp-ind "Pup")) CxC))
-      (v/assert kb (list dog_t Rex) CxC)
-      (v/assert kb (list cat_t Rex) CxA)
+      (dotimes [_ 20] (v/assert kb (list dog_t (tu/tmp-ind "Pup")) CxA))
+      (v/assert kb (list dog_t Rex) CxA)
+      (v/assert kb (list cat_t Rex) CxB)
       (v/clear-violations! kb)
       (v/assert kb (list animal_species dog_t) 'CxUniverse)
       (let [vs (v/violations kb)]
@@ -995,6 +1017,132 @@
       (is (= 1 (count edges-first)))
       (is (= edges-first edges-last)
           "the identical entry whichever half of the setup arrived last"))))
+
+;; ---- the edge reveals the MARK, not a second fact -----------------------
+;;
+;; The cases above split the clashing pair across two siblings and bring the two halves
+;; into one sight.  The other shape is a pair already **together** in one context `w` and
+;; a `(genlCx w c)` edge that reveals the tuple mark standing in `c`: `w` gains sight of
+;; the declaration, not of a second fact, so `constraint-facts-in-ancestors` has to read
+;; the facts off the edge's **sub** (`w`, the newly-seeing context), not its super.
+;; Without that the clash is found only when the mark or a fact arrives last, and the same
+;; KB believes differently by arrival order — the invariant `docs/nmtms.md` forbids.
+;; Each of the four `:predicate-marked` marks has a witness of this shape below:
+;; `functional` and `asymmetric` at arity 2, `anti_transitive` as a three-member triple,
+;; and `functionalInArg` at its final position, which is the one `marked-at-final-arg?`
+;; branch the arity-2 marks never take.
+
+(tu/deftest-kb a-genlCx-edge-revealing-a-functional-mark-decides-a-co-located-pair
+  (tu/with-terms [CxU CxD birthYear Tom]
+    (let [one (list birthYear Tom 1970) two (list birthYear Tom 1980)]
+      (v/assert kb (list 'functional birthYear) CxD)      ; the mark, invisible to CxU
+      (v/assert kb one CxU)
+      (v/assert kb two CxU)
+      (is (empty? (filter (comp #{:functional} :violation) (v/violations kb)))
+          "CxU cannot see the mark yet, so nothing clashes")
+      (v/assert kb (list 'genlCx CxU CxD) 'CxUniverse)    ; the edge, arriving last
+      (let [cs (v/contradictions kb)]
+        (is (= [:functional] (mapv :kind cs)) "the edge reveals the mark and the co-located pair is weighed")
+        (is (= #{one two} (set (map :sentence (:sides (first cs)))))))
+      (testing "an equal-strength pair is a dilemma: both stand, and nothing is filed as exposed"
+        (is (seq (v/sentexes-matching kb one CxU)))
+        (is (seq (v/sentexes-matching kb two CxU)))
+        (is (empty? (filter (comp #{:functional} :violation) (v/violations kb))))))))
+
+(tu/deftest-kb a-genlCx-edge-revealing-an-anti-transitive-mark-decides-a-co-located-triple
+  ;; the three-member nogood, the candidate shape the pairwise reach would miss
+  (tu/with-terms [CxU CxD directParentOf Aa Bb Cc]
+    (v/assert kb (list directParentOf Aa Bb) CxU)
+    (v/assert kb (list directParentOf Bb Cc) CxU)
+    (v/assert kb (list directParentOf Aa Cc) CxU)          ; the closing step, beside the chain
+    (v/assert kb (list 'anti_transitive directParentOf) CxD)
+    (is (empty? (filter (comp #{:anti-transitive} :violation) (v/violations kb)))
+        "CxU cannot see the mark yet")
+    (v/assert kb (list 'genlCx CxU CxD) 'CxUniverse)
+    (let [cs (v/contradictions kb)]
+      (is (= [:anti-transitive] (mapv :kind cs))
+          "the edge reveals the mark and the chain-plus-step triple is weighed")
+      (is (= 3 (count (:sides (first cs))))))
+    (testing "an equal-strength triple is a dilemma: all three stand, nothing filed as exposed"
+      (is (seq (v/sentexes-matching kb (list directParentOf Aa Cc) CxU)))
+      (is (empty? (filter (comp #{:anti-transitive} :violation) (v/violations kb)))))))
+
+(tu/deftest-kb a-genlCx-edge-revealing-an-asymmetric-mark-decides-a-co-located-pair
+  ;; the second arity-2 predicate-marked mark, beside `functional`: the reversed-argument
+  ;; clash, both halves together in CxU, the mark in CxD, the edge last
+  (tu/with-terms [CxU CxD beats Ann Bob]
+    (let [one (list beats Ann Bob) two (list beats Bob Ann)]
+      (v/assert kb (list 'asymmetric beats) CxD)          ; the mark, invisible to CxU
+      (v/assert kb one CxU)
+      (v/assert kb two CxU)
+      (is (empty? (filter (comp #{:asymmetric} :violation) (v/violations kb)))
+          "CxU cannot see the mark yet, so nothing clashes")
+      (v/assert kb (list 'genlCx CxU CxD) 'CxUniverse)    ; the edge, arriving last
+      (let [cs (v/contradictions kb)]
+        (is (= [:asymmetric] (mapv :kind cs)) "the edge reveals the mark and the co-located pair is weighed")
+        (is (= #{one two} (set (map :sentence (:sides (first cs)))))))
+      (testing "an equal-strength pair is a dilemma: both stand, and nothing is filed as exposed"
+        (is (seq (v/sentexes-matching kb one CxU)))
+        (is (seq (v/sentexes-matching kb two CxU)))
+        (is (empty? (filter (comp #{:asymmetric} :violation) (v/violations kb))))))))
+
+(tu/deftest-kb a-genlCx-edge-revealing-a-functional-in-arg-mark-decides-a-co-located-composite
+  ;; `functionalInArg` at its final position, the `marked-at-final-arg?` branch of
+  ;; `constraint-facts-in-ancestors` the two arity-2 marks never take: `(functionalInArg P
+  ;; 3)` on a ternary, two rows sharing the (arg1,arg2) determinant with unmergeable
+  ;; fillers at the constrained position, together in CxU with the mark in CxD.  An
+  ;; unmergeable pair at the determined slot reports a `:functional` clash instead of
+  ;; merging, so this reads the same violation `functional` does.
+  (tu/with-terms [CxU CxD pScore TeamA Y2020]
+    (let [one (list pScore TeamA Y2020 10) two (list pScore TeamA Y2020 20)]
+      (v/assert kb (list 'functionalInArg pScore 3) CxD)  ; the mark, invisible to CxU
+      (v/assert kb one CxU)
+      (v/assert kb two CxU)
+      (is (empty? (filter (comp #{:functional} :violation) (v/violations kb)))
+          "CxU cannot see the mark yet, so nothing clashes")
+      (v/assert kb (list 'genlCx CxU CxD) 'CxUniverse)    ; the edge, arriving last
+      (let [cs (v/contradictions kb)]
+        (is (= [:functional] (mapv :kind cs))
+            "the edge reveals the mark and the co-located composite pair is weighed")
+        (is (= #{one two} (set (map :sentence (:sides (first cs)))))))
+      (testing "an equal-strength pair is a dilemma: both stand, and nothing is filed as exposed"
+        (is (seq (v/sentexes-matching kb one CxU)))
+        (is (seq (v/sentexes-matching kb two CxU)))
+        (is (empty? (filter (comp #{:functional} :violation) (v/violations kb))))))))
+
+(deftest under-arbitrate-a-revealed-mark-defeats-the-co-located-loser-in-every-order
+  ;; The belief witness, and the one the exposure half alone does not give: under
+  ;; `:arbitrate` the deciding path weighs the pair, so the revealed mark must defeat the
+  ;; :default loser against a :monotonic rival — and the answer may not turn on which of
+  ;; {mark, facts, edge} arrived last.  `:arbitrate`, since that is where belief moves.
+  ;; `functional` and `asymmetric` both decide the clash by defeat and run here together;
+  ;; `functionalInArg` decides by merging the fillers, a different outcome, so it is pinned
+  ;; by its own exposure witness above rather than folded into this defeat test.
+  (tu/with-terms [CxU CxD birthYear Tom beats Ann Bob]
+    (doseq [[mark mono loser]
+            [[(list 'functional birthYear) (list birthYear Tom 1970) (list birthYear Tom 1980)]
+             [(list 'asymmetric beats)     (list beats Ann Bob)      (list beats Bob Ann)]]]
+      (let [mark! #(v/assert % mark CxD)
+            edge! #(v/assert % (list 'genlCx CxU CxD) 'CxUniverse)
+            m!    #(v/assert % mono CxU {:strength :monotonic})  ; known-true, stands
+            l!    #(v/assert % loser CxU {:strength :default})   ; defeasible, must lose
+            ;; the loser reaches "not believed" two legitimate ways under :arbitrate —
+            ;; stored then defeated (edge/mark last), or refused at the entry point when the
+            ;; visible known-true rival is already there (facts last, where admitting it
+            ;; would store what can never be believed).  Either is order-independent belief;
+            ;; the catch tolerates the entry refusal so the final believed set is compared.
+            belief (fn [order]
+                     (tu/with-neutral-kb [k #(v/open-kb (assoc tu/scratch-space :constraints :arbitrate))]
+                       (doseq [step order]
+                         (try (step k) (catch clojure.lang.ExceptionInfo _ nil)))
+                       [(boolean (seq (v/sentexes-matching k mono CxU)))
+                        (boolean (seq (v/sentexes-matching k loser CxU)))]))]
+        (doseq [[label order] [[:edge-last  [mark! m! l! edge!]]
+                               [:mark-last  [edge! m! l! mark!]]
+                               [:facts-last [mark! edge! m! l!]]]]
+          (is (= [true false] (belief order))
+              (str mark " / " (name label)
+                   ": the monotonic fact stands and the default loser does not")))))))
 
 (tu/deftest-kb an-edge-whose-ancestor-set-is-cut-short-says-so
   ;; The trigger reaches out of the region, so it is budgeted like every other sweep —

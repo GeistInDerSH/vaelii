@@ -92,7 +92,7 @@
   ;; the antecedents alone produces *five* here — the 120 orderings enumerate fine under
   ;; the cutoff, and the tiebreak is what fails (see the next test).
   (let [lits '[(p ?a ?b) (p ?b ?c) (p ?c ?d) (p ?d ?e) (p ?e ?a)]
-        forms (into #{} (map #(:sentence (sx/sentex (list 'implies (cons 'and %) '(out ?a)) 'CxA)))
+        forms (into #{} (map #(sx/sentence-of (sx/sentex (list 'implies (cons 'and %) '(out ?a)) 'CxA)))
                     (permutations lits))]
     (is (= 1 (count forms)) (str "one canonical form, got " (count forms) ": " (pr-str forms)))))
 
@@ -121,7 +121,7 @@
     ;; four disconnected copies of one predicate: every ordering renders the same
     ;; antecedents, and only the consequent says which copy matters
     (let [lits '[(p ?a ?b) (p ?c ?d) (p ?e ?f) (p ?g ?h)]
-          forms (into #{} (map #(:sentence (sx/sentex (list 'implies (cons 'and %) '(out ?e)) 'CxA)))
+          forms (into #{} (map #(sx/sentence-of (sx/sentex (list 'implies (cons 'and %) '(out ?e)) 'CxA)))
                       (permutations lits))]
       (is (= 1 (count forms))))))
 
@@ -142,7 +142,7 @@
   (testing "all 720 orderings of six joinless literals land on one form"
     (let [antes (joinless-antes 6)
           rule  (fn [a] (list 'implies (cons 'and a) (cons 'q (map second a))))  ; consequent refs each first arg
-          forms (into #{} (map #(:sentence (sx/sentex (rule (vec %)) 'CxA)))
+          forms (into #{} (map #(sx/sentence-of (sx/sentex (rule (vec %)) 'CxA)))
                       (permutations antes))]
       (is (= 1 (count forms)) (str "expected one canonical form, got " (count forms)))
       (testing "and it is the minimal numbering — each antecedent's first var in consequent order"
@@ -168,7 +168,7 @@
                  '(q ?a3 ?a0 ?a5)                     ; mixed first/second
                  '(out Constant)]]                    ; none — wholly interchangeable
     (doseq [conseq conseqs]
-      (let [forms (into #{} (map #(:sentence (sx/sentex (list 'implies (cons 'and %) conseq) 'CxA)))
+      (let [forms (into #{} (map #(sx/sentence-of (sx/sentex (list 'implies (cons 'and %) conseq) 'CxA)))
                         (permutations antes))]
         (is (= 1 (count forms))
             (str "consequent " (pr-str conseq) " gave " (count forms) " forms across orderings"))))))
@@ -181,7 +181,7 @@
   (let [xprod (joinless-antes 2)                      ; (rel ?a0 ?a1)(rel ?a2 ?a3)
         chn   (chain 'edge 3 "?p")                    ; (edge ?p0 ?p1)(edge ?p1 ?p2)(edge ?p2 ?p3)
         conseq '(q ?a0 ?p0 ?p3)
-        canon (fn [lits] (:sentence (sx/sentex (list 'implies (cons 'and (vec lits)) conseq) 'CxA)))
+        canon (fn [lits] (sx/sentence-of (sx/sentex (list 'implies (cons 'and (vec lits)) conseq) 'CxA)))
         forms (into #{} (map canon)
                     [(into (vec xprod) chn)                                  ; xprod then chain
                      (into (vec chn) xprod)                                  ; chain then xprod
@@ -247,9 +247,9 @@
   ;; flat list — but a dotted form's arguments are a *splice*, and treating the tail
   ;; variable as an argument produces a literal that quietly matches nothing.
   (testing "a dotted greaterThan is not reversed onto lessThan"
-    (is (= '(greaterThan ?a . ?rest) (:sentence (sx/sentex '(greaterThan ?a . ?rest) 'CxA))))
+    (is (= '(greaterThan ?a . ?rest) (sx/sentence-of (sx/sentex '(greaterThan ?a . ?rest) 'CxA))))
     (testing "while the ordinary form still folds"
-      (is (= '(lessThan 3 5) (:sentence (sx/sentex '(greaterThan 5 3) 'CxA))))))
+      (is (= '(lessThan 3 5) (sx/sentence-of (sx/sentex '(greaterThan 5 3) 'CxA))))))
   (testing "two dotted lessThans do not merge into one variable-arity literal"
     ;; the structure that *would* merge: the tail of the first is the head of the second,
     ;; which is exactly the (a<b)+(b<c) test `collapse-comparison-chains` looks for.
@@ -276,15 +276,15 @@
   ;; answering correctly while the stored antecedent was wrong.
   (let [sym #{'sib}]
     (testing "a pattern is left exactly as written, either way round"
-      (is (= '(sib ?x B) (:sentence (sx/sentex '(sib ?x B) 'CxA {:symmetric? sym}))))
-      (is (= '(sib B ?x) (:sentence (sx/sentex '(sib B ?x) 'CxA {:symmetric? sym})))))
+      (is (= '(sib ?x B) (sx/sentence-of (sx/sentex '(sib ?x B) 'CxA {:symmetric? sym}))))
+      (is (= '(sib B ?x) (sx/sentence-of (sx/sentex '(sib B ?x) 'CxA {:symmetric? sym})))))
     (testing "a variable nested inside a compound argument counts as non-ground too"
-      (is (= '(sib (f ?x) B) (:sentence (sx/sentex '(sib (f ?x) B) 'CxA {:symmetric? sym})))))
+      (is (= '(sib (f ?x) B) (sx/sentence-of (sx/sentex '(sib (f ?x) B) 'CxA {:symmetric? sym})))))
     (testing "while a fully ground literal is sorted, which is what dedups the pair"
-      (is (= '(sib Ann Zed) (:sentence (sx/sentex '(sib Zed Ann) 'CxA {:symmetric? sym}))))
-      (is (= '(sib Ann Zed) (:sentence (sx/sentex '(sib Ann Zed) 'CxA {:symmetric? sym})))))
+      (is (= '(sib Ann Zed) (sx/sentence-of (sx/sentex '(sib Zed Ann) 'CxA {:symmetric? sym}))))
+      (is (= '(sib Ann Zed) (sx/sentence-of (sx/sentex '(sib Ann Zed) 'CxA {:symmetric? sym})))))
     (testing "and an undeclared predicate is never touched"
-      (is (= '(ord Zed Ann) (:sentence (sx/sentex '(ord Zed Ann) 'CxA {:symmetric? sym})))))))
+      (is (= '(ord Zed Ann) (sx/sentence-of (sx/sentex '(ord Zed Ann) 'CxA {:symmetric? sym})))))))
 
 ;; ---- nested exceptions conjoin ------------------------------------------
 
@@ -314,7 +314,7 @@
     (testing "and the wrappers underneath still reach the rule's own fields"
       (is (true? (:defeasible (v/sentex kb rh))))
       (is (= (list 'implies (list bird '?var0) (list flies '?var0))
-             (:sentence (v/sentex kb rh))))))
+             (v/sentence-of (v/sentex kb rh))))))
   (testing "a third nesting conjoins too, and its order is not its identity"
     (let [bird (tu/tmp-type) a1 (tu/tmp-type) b1 (tu/tmp-type) c1 (tu/tmp-type) flies (tu/tmp-pred)
           rule-form (vr/rule-sentence [(list bird '?b)] (list flies '?b))
@@ -343,8 +343,8 @@
     (let [s (sx/sentex '(implies (and (p Zed) (p Ann)) (q Zed)) 'CxA)]
       (is (= '[(p Ann) (p Zed)] (:antecedent s)) "lexically ascending, not as written")))
   (testing "so the two spellings are one rule"
-    (is (= (:sentence (sx/sentex '(implies (and (p Zed) (p Ann)) (q Zed)) 'CxA))
-           (:sentence (sx/sentex '(implies (and (p Ann) (p Zed)) (q Zed)) 'CxA)))))
+    (is (= (sx/sentence-of (sx/sentex '(implies (and (p Zed) (p Ann)) (q Zed)) 'CxA))
+           (sx/sentence-of (sx/sentex '(implies (and (p Ann) (p Zed)) (q Zed)) 'CxA)))))
   (tu/with-terms [holds noted Zed Ann]
     ;; the consequent takes its own predicate: a literal sharing the consequent's
     ;; predicate is held back as the recursive one, which would decide the order for a

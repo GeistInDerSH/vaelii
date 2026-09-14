@@ -20,20 +20,20 @@ transitive up/down closure (`context-up`, `context-down`, `sees?`), recomputed w
 `genlCx` edge is asserted/retracted. A context `K` sees a sentex in context `Y`
 iff `Y ∈ context-up(K)`.
 
-**Two contexts may see each other.** Unlike `genl`, a `genlCx` cycle is admitted:
-visibility is a preorder, not an order, and mutual visibility is a claim an ontology
-makes — OpenCyc's `genlMt` graph has 49 such components, one of them BaseKB's own
-(`BaseKB ↔ UniversalVocabularyMt ↔ CycAgencyTheoryMt ↔ …`). Reachability over a cycle
-is perfectly well defined, so the closures answer it directly; the taxonomy keeps its
-depth potential over the **condensation** and reads a mutually-visible pair in O(1)
-(see [taxonomy.md](taxonomy.md)).
+**A `genlCx` cycle is refused at assert, like a `genl` cycle.** The context hierarchy
+is a partial order: `wff/genlCx-problems` reads the global `genlCx` closure and refuses
+an edge whose super already sees its sub, so mutual visibility is not a claim the edge
+set may assert. A cycle a recovered or foreign store replays past that check
+(`recovery/recover`) is still held — reachability over a cycle is well defined, so the
+closures answer it directly; the taxonomy keeps its depth potential over the
+**condensation** and reads a mutually-visible pair in O(1) (see [taxonomy.md](taxonomy.md)).
 
-What a cycle is *not* is a merge. The contexts stay distinct records with distinct
+A held cycle is not a merge. The contexts stay distinct records with distinct
 extents, because a context is where a sentex is **stored** and not only what it can see:
-`sentexes-matching` is exact-context, `(ist BaseKB S)` and `(ist UniversalVocabularyMt S)` are two
+`sentexes-matching` is exact-context, `(ist CxA S)` and `(ist CxB S)` are two
 sentexes, and collapsing them would throw away which context an assertion was made
 in — the one thing an ontology import exists to carry. The claim "each sees the other"
-is weaker than "these are the same place", and only the weaker one was made.
+is weaker than "these are the same place", and the taxonomy holds only the weaker one.
 
 The single point where the engine needs a unique answer is **placement**, since every
 member of a component is an equally maximal common descendant and the conclusion should
@@ -661,8 +661,9 @@ scoped check: `settle` runs each candidate's definitional question from its own 
 sentex it could pair with. That chooses the asker rather than widening what an asker
 sees — a vantage already sees both halves — and it is what stops the same three
 sentences from landing on a defeat or on two coexisting claims according to which half
-was written last ([nmtms.md](nmtms.md)). Under `:refuse` the pass files the report and
-belief is untouched.
+was written last ([nmtms.md](nmtms.md)). Under `:refuse` no vantage is asked, so a clash
+only a common descendant sees is reported and belief is untouched, live and after a
+restart alike; a clash a member's own context sees is weighed under either policy.
 
 **The pass asks its question of the scoped read, not of an enumeration.** For a
 candidate pair of held memberships it must answer "does any context see both of these

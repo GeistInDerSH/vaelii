@@ -16,7 +16,7 @@
   records cannot cancel each other out.
 
   **What is hashed is what the index is a function of**: the handle, `:sentence`,
-  `:context`, `:polarity`, and a rule's `:antecedent` / `:consequent`.  `sentex/path`,
+  `:context`, the sign (`sentex/polarity`), and a rule's `:antecedent` / `:consequent`.  `sentex/path`,
   `kv/root-keys`, `kv/sentex-terms` and the rule index read exactly those, and the handle
   because a posting *is* a set of handles — the same content at a different handle makes
   every posting naming it wrong.  Deliberately **not** hashed: `:strength`, `:varmap`,
@@ -42,7 +42,8 @@
   a record rewritten to the same bytes at the same offset (nothing can produce that),
   and it *does* see a rewrite the index does not care about — a premise mark, or a
   compaction moving every frame — so a snapshot is discarded and rebuilt after one.
-  Both directions are safe, because a discard is always legal for derived state.")
+  Both directions are safe, because a discard is always legal for derived state."
+  (:require [vaelii.impl.sentex :as sx]))
 
 (def ^:private ^:const fnv-offset 1469598103934665603)
 (def ^:private ^:const fnv-prime  1099511628211)
@@ -59,7 +60,7 @@
       (mix h)
       (mix (hash (:sentence sx)))
       (mix (hash (:context sx)))
-      (mix (hash (:polarity sx)))
+      (mix (hash (sx/polarity sx)))
       (mix (hash (:antecedent sx)))
       (mix (hash (:consequent sx)))))
 
@@ -70,23 +71,39 @@
   ^long [^long h ^long offset ^long length]
   (-> fnv-offset (mix h) (mix offset) (mix length)))
 
+(defn justification-hash
+  "A 64-bit hash of the justification `j` stored at handle `h` — what belief reads of it:
+  the informant, the antecedents in their stored order, the consequence and the
+  strength.  The bindings are not hashed: belief never reads them
+  (`jtms/graph-just`).  A dump's belief image is stamped with an accumulator of these, so
+  an import that lands different justifications declines the image."
+  ^long [^long h j]
+  (-> fnv-offset
+      (mix h)
+      (mix (hash (:informant j)))
+      (mix (hash (vec (:antecedents j))))
+      (mix (hash (:consequence j)))
+      (mix (hash (:strength j)))))
+
 (defn accumulator
-  "A mutable fingerprint accumulator: `(acc h sx)` folds one record in, `(acc)` reads
+  "A mutable fingerprint accumulator: `(acc h record)` folds one record in, `(acc)` reads
   `{:count n :max-handle h :digest d}`.  Mutable because it is folded inside the storing
   loop — the one pass over the records a reader gets — and single-writer like everything
-  else here."
-  []
-  (let [n      (volatile! 0)
-        hi     (volatile! 0)
-        digest (volatile! 0)]
-    (fn
-      ([] {:count @n :max-handle @hi :digest @digest})
-      ([h sx]
-       (let [h (long h)]
-         (vswap! n inc)
-         (when (> h (long @hi)) (vreset! hi h))
-         (vswap! digest (fn [^long d] (unchecked-add d (record-hash h sx)))))
-       nil))))
+  else here.  `hash-fn` is `record-hash` unless given (`justification-hash` for the
+  justifications)."
+  ([] (accumulator record-hash))
+  ([hash-fn]
+   (let [n      (volatile! 0)
+         hi     (volatile! 0)
+         digest (volatile! 0)]
+     (fn
+       ([] {:count @n :max-handle @hi :digest @digest})
+       ([h rec]
+        (let [h (long h)]
+          (vswap! n inc)
+          (when (> h (long @hi)) (vreset! hi h))
+          (vswap! digest (fn [^long d] (unchecked-add d (long (hash-fn h rec))))))
+        nil)))))
 
 (defn slot-accumulator
   "The same accumulator over slots rather than records: `(acc h offset length)` folds one

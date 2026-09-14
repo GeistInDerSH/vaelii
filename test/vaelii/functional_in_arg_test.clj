@@ -159,6 +159,14 @@
   [kb]
   (boolean (some #(= :functional (:violation %)) (v/violations kb))))
 
+(defn- any-functional-clash?
+  "Is a `:functional` clash on record at all — filed as exposed, or decided into
+  `contradictions` or `conflicts`?  A late declaration whose pair a member's own context
+  sees is decided rather than filed, under either constraint policy."
+  [kb]
+  (boolean (or (any-functional-violation? kb)
+               (some #(= :functional (:kind %)) (concat (v/contradictions kb) (v/conflicts kb))))))
+
 (defn- ex-type
   "The `:type` of the ex-info a thunk throws, or nil.  A refusal that collapses into an
   arity or naming error is exactly the regression a bare `thrown?` stays green through."
@@ -609,8 +617,8 @@
     (v/assert kb (list birthYearOf Tom 1980) U)
     (v/assert kb (list birthYearOf Tom 1990) U)
     (v/assert kb (list 'functional birthYearOf) U)       ; declaration LAST
-    (check (any-functional-violation? kb)
-           "today's functional reports a pair already stored when the mark arrives")))
+    (check (any-functional-clash? kb)
+           "functional accounts for a pair already stored when the mark arrives")))
 
 (tu/deftest-kb functional-in-arg-2-declared-after-unmergeable-facts-is-reported
   ;; The regression half of the generalization, applied to the clash lane: at arity 2
@@ -619,8 +627,8 @@
     (v/assert kb (list birthYearOf Tom 1980) U)
     (v/assert kb (list birthYearOf Tom 1990) U)
     (v/assert kb (list 'functionalInArg birthYearOf 2) U) ; declaration LAST
-    (check (any-functional-violation? kb)
-           "(functionalInArg P 2) must report retroactively exactly as (functional P) does")))
+    (check (any-functional-clash? kb)
+           "(functionalInArg P 2) must account for the pair retroactively exactly as (functional P) does")))
 
 (tu/deftest-kb functional-in-arg-3-declared-after-unmergeable-facts-is-reported
   ;; The shape the mark exists for, in the arrival order the special case handles: a
@@ -629,7 +637,7 @@
     (v/assert kb (list namesObject NsA PathA 1) U)
     (v/assert kb (list namesObject NsA PathA 2) U)
     (v/assert kb (list 'functionalInArg namesObject 3) U) ; declaration LAST
-    (check (any-functional-violation? kb)
+    (check (any-functional-clash? kb)
            "one namespace and one path cannot name two numbers, whenever the mark arrives")))
 
 (tu/deftest-kb a-genl-edge-arriving-last-carries-the-generalized-mark-down
@@ -649,8 +657,8 @@
     (v/assert kb (list fatherOf Tom 1980) U)
     (v/assert kb (list fatherOf Tom 1990) U)
     (v/assert kb (list 'genl fatherOf parentOf) U)        ; edge LAST
-    (check (any-functional-violation? kb)
-           "the mark descends to fatherOf when the edge lands, and the stored pair is reported")))
+    (check (any-functional-clash? kb)
+           "the mark descends to fatherOf when the edge lands, and the stored pair is decided")))
 
 (tu/deftest-kb a-malformed-generalized-declaration-triggers-no-sweep
   ;; The trigger gate reads the position as well as the predicate.  A declaration whose

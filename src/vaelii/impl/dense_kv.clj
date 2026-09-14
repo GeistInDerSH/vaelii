@@ -358,3 +358,13 @@
   "A dense in-memory `IndexStore` — `KvIndexStore` over a `TieredKvBackend`."
   [opts]
   (kv/->KvIndexStore (dense-kv-backend opts)))
+
+(defn drop-index-space!
+  "Forget the derived index state held under `space` — the dense twin of
+  `vaelii.impl.memory/drop-index-space!`, `core/close!`'s release of the RAM index a
+  disk-backed KB derived.  A no-op for a `space` nothing holds; returns true when an entry
+  was dropped."
+  [space]
+  (let [had? (contains? @index-spaces space)]
+    (swap! index-spaces dissoc space)
+    had?))

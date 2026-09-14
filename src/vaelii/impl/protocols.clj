@@ -48,10 +48,10 @@
   ;; three promise is what the engine actually does to them — `contains?`, `count`, `seq`,
   ;; `sort`, and `=` against another set — and a caller wanting `conj`, `disj` or
   ;; `clojure.set` converts with `(set …)`, which is the copy, taken at the call site that
-  ;; needs it rather than by every store on every enumeration.  Every store the engine
-  ;; ships answers a `PersistentHashSet<Long>`, because that is what its own state already
-  ;; is; a store large enough for the shape to be the cost answers `vaelii.impl.roster`'s
-  ;; compressed one instead, at 0.2 bytes a handle against 48–75, and no caller can tell.
+  ;; needs it rather than by every store on every enumeration.  The memory store answers a
+  ;; `PersistentHashSet<Long>`, because that is what its own state already is.  The disk
+  ;; store, and any store large enough for the shape to be the cost, answers
+  ;; `vaelii.impl.roster`'s compressed one instead, at 0.2 bytes a handle against 48–75.
   ;;
   ;; The **tally** questions — how many, is there one at all — do not need the set and are
   ;; asked through `Tallying`'s helpers below, which fall back to these.

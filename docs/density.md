@@ -555,7 +555,7 @@ calls the form a common-sense KB actually takes:
 |---|---|---|
 | flat KV index (resident, whole map) | **293.73 GB** | linear |
 | dense JTMS | **16.56 GB** | linear |
-| record premises (boxed set) | **4.12 GB** | linear |
+| record premises (boxed set, before the `LiveRoster` conversion) | **4.12 GB** | linear |
 | hot-record cache | 41.2 MB | capped at 65,536 records/kind |
 | record live-id rosters | tens of KB | refused — too small for four points to resolve |
 | record store, rest | 1.6 KB | flat in the extent |
@@ -594,17 +594,18 @@ the three steps between the four points, and **4.22 GB at j/n 0.5** — slightly
 because the target is a fixed sentex count and fewer justifications means fewer of those
 sentexes are non-premise rule conclusions, so more of the same 100M are premise-bearing.
 Either way it is the size a boxed `PersistentHashSet<Long>` gives at this cardinality,
-because that is still the representation. `premises` still needs no monitor on its write
-path today ([storage.md](storage.md#tallying--the-questions-that-do-not-need-the-roster)):
-that argument does not change by measuring the set more precisely, only the case for
-converting its representation does.
+which was the representation when this run measured it. The premise set is now a
+`LiveRoster` under the sentexes kind lock
+([storage.md](storage.md#tallying--the-questions-that-do-not-need-the-roster)), and this
+row is owed a re-run of `lein bench-budget`.
 
 **The engine-wide saving from the roster conversion is the pair, not the roster row
 alone.** Before: 9.47 GB of boxed rosters plus 4.07 GB of (then-unattributed) premises,
 13.54 GB. After: under 100 KB of bitmap roster plus 4.12 GB of (now-named) boxed premises,
 4.12 GB. The roster's own multiple is real, but reading it alone credits the conversion
-with more than it delivered — the honest saving is what the pair actually gave back,
-**9.4 GB**, and the premise set is what is left to convert to close the rest of it.
+with more than it delivered — the measured saving is what the pair actually gave back,
+**9.4 GB**. The premise set has since taken the same conversion, and its saving is the
+re-run's to report.
 
 **The index is the whole problem, and it is worse than its coefficient suggests.** 294 GB
 is 7.3× the entire budget on one row. Nothing that compresses what the map holds closes a

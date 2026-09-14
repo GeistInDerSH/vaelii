@@ -127,10 +127,12 @@
                        h (p/put-sentex rec s)]
                    (p/mark-premise rec h :default)
                    (p/index-sentex idx (assoc s :id h) h)))]
-    ;; a well-formed genlCx cycle — two contexts that see each other, admitted
-    ;; (docs/contexts.md) — which forces the condensation walk during the replay
-    (v/assert kb (list 'genlCx 'CxAaa 'CxBbb) 'CxUniverse)
-    (v/assert kb (list 'genlCx 'CxBbb 'CxAaa) 'CxUniverse)
+    ;; a genlCx cycle — two contexts that see each other — which forces the condensation
+    ;; walk during the replay.  `wff` refuses one at assert (docs/contexts.md), but a
+    ;; foreign or older writer's store can hold it and recovery replays the stored edges
+    ;; past the checks, so it is stored directly here the way such a writer would.
+    (store! '(genlCx CxAaa CxBbb))
+    (store! '(genlCx CxBbb CxAaa))
     ;; the malformed declarations: a two-element genl / genlCx sentex a foreign loader or an
     ;; older writer's store presents, which no assert path would let past `wff`
     (store! '(genl foo))

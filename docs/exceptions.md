@@ -129,10 +129,11 @@ exception lifts the block.
 
 ### The re-check index
 
-The key structural fact is one the engine already maintains: **a rule handle is an
-antecedent of every justification it licenses**. So every conclusion a rule
-produced is reachable from the rule through the existing consequence links, and no
-per-firing bookkeeping is required.
+The key structural fact is one the engine already maintains: **the TMS lists every
+justification a rule licenses under the rule's node** — the rule is the justification's
+informant, and `valid?` needs it believed. So every conclusion a rule produced is
+reachable from the rule through the existing consequence links, and no per-firing
+bookkeeping is required.
 
 That allows an index at *rule* granularity:
 
@@ -631,9 +632,10 @@ TMS state carries `:blocked`, a set of justification ids currently blocked by th
 exception, and `valid?` reads it:
 
 ```clojure
-(and (every? #(contains? in %) (:antecedents j))
-     (not-any? #(contains? in %) (:out j))
-     (not (contains? blocked (:id j))))
+(let [inf (:informant j)]
+  (and (every? #(contains? in %) (:antecedents j))
+       (or (not (integer? inf)) (contains? in inf))   ; the rule, when it is a handle
+       (not (contains? blocked (:id j)))))
 ```
 
 Belief and blocking are mutually dependent — a level-6 query reads believed facts,

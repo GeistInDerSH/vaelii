@@ -59,7 +59,8 @@
   `genl` or `symmetric` edge change needs no memory update either.
 
   See docs/inference.md, \"Incremental rule matching\"."
-  (:require [vaelii.impl.chain :as chain]
+  (:require [vaelii.impl.caches :as caches]
+            [vaelii.impl.chain :as chain]
             [vaelii.impl.jtms :as jtms]
             [vaelii.impl.naming :as nm]
             [vaelii.impl.observe :as observe]
@@ -67,12 +68,18 @@
             [vaelii.impl.resolution :as res]
             [vaelii.impl.rules :as rules]
             [vaelii.impl.sentex :as sx]
-            [vaelii.impl.taxonomy :as tax]))
+            [vaelii.impl.taxonomy :as tax])
+  (:import [java.lang.ref ReferenceQueue WeakReference]))
 
 ;; ---- the per-KB alpha registry ------------------------------------------
-;; Keyed by KB **object identity**, not value: two KBs over the same space
-;; can be `=` (their record stores wrap the same shared state) but must not share an
-;; alpha.  A `java.util.IdentityHashMap` keys on `==`.
+;; Keyed by KB **object identity** (two KBs over one space can be `=` — their record
+;; stores wrap the same shared state — but must not share an alpha), and holding each KB
+;; **weakly**, so the registry never pins a KB against collection.  A KB its owner has
+;; dropped is reclaimed by GC and its entry purged (`purge!`), and one released through
+;; `core/close!` is dropped at once (`forget-kb!`): a process that opens KBs in a loop
+;; keeps one alpha per *live* tracked KB, not one per KB it ever opened.  Neither built-in
+;; map fits — an `IdentityHashMap` holds keys strongly, a `WeakHashMap` keys on value
+;; equality — so the keys are identity `WeakReference`s drained through a `ReferenceQueue`.
 ;;
 ;; Synchronized, unlike the alphas it holds.  The engine is single-writer and each alpha
 ;; is an atom, but this map is JVM-lifetime shared state reached from the store observer
@@ -80,8 +87,42 @@
 ;; rehash does not merely lose an entry: a reader can spin on a probe loop that never
 ;; terminates.  The cost is one uncontended monitor per lookup against a map with as many
 ;; entries as the process has live KBs.
+;;
+;; The alpha memories are also a registered cache (`:rete-alpha`, foot of file): each is
+;; rebuilt from the store on next use, so the memory-pressure guard may drop one and
+;; `alpha-for` rebuilds it.
 (defonce ^:private ^java.util.Map registry
-  (java.util.Collections/synchronizedMap (java.util.IdentityHashMap.)))
+  (java.util.Collections/synchronizedMap (java.util.HashMap.)))
+
+(defonce ^:private ^ReferenceQueue reg-queue (ReferenceQueue.))
+
+(defn- weak-key
+  "A registry key holding `kb` weakly and comparing by object identity.  Its `hashCode` is
+  the referent's identity hash, cached so a key whose KB has been collected still lands in
+  its bucket to be purged.  Registered with `reg-queue` only when it goes *into* the map;
+  a lookup key needs no registration."
+  (^WeakReference [kb] (weak-key kb nil))
+  (^WeakReference [kb ^ReferenceQueue q]
+   (let [h (System/identityHashCode kb)]
+     (proxy [WeakReference] [kb q]
+       (hashCode [] h)
+       (equals [o]
+         (or (identical? this o)
+             (and (instance? WeakReference o)
+                  (let [a (.get ^WeakReference this)]
+                    (and (some? a) (identical? a (.get ^WeakReference o)))))))))))
+
+(defn- purge!
+  "Drop the entries whose KB has been collected — one queue poll per reclaimed KB, so this
+  costs the number reclaimed since the last call rather than the registry's size.  Run
+  under `(locking registry)`."
+  []
+  (loop [] (when-let [r (.poll reg-queue)] (.remove registry r) (recur))))
+
+(defn- alpha-fact-count
+  "How many stored facts an alpha holds — the `:all` bucket per functor, summed."
+  [alpha]
+  (reduce + 0 (map #(count (:all %)) (vals (:by-functor @alpha)))))
 
 (defn- index-functor
   "The functor a fact is bucketed under: the functor of its positive atomic body, so
@@ -135,7 +176,7 @@
 (defn- alpha-for
   "This KB's alpha memories, built (and back-filled from the store) on first use."
   [kb]
-  (or (.get registry kb)
+  (or (.get registry (weak-key kb))
       ;; Check, put and back-fill are one step: two callers racing here would each build
       ;; an alpha, and the loser's would be handed to its caller and then never updated
       ;; again — the observer hooks maintain whichever one the map holds.  The put stays
@@ -143,9 +184,10 @@
       ;; meant to maintain, and the scan runs under the monitor so nobody is handed a
       ;; half-filled one.  Paid once per KB.
       (locking registry
-        (or (.get registry kb)
+        (purge!)
+        (or (.get registry (weak-key kb))
             (let [a (atom {:by-functor {}})]
-              (.put registry kb a)
+              (.put registry (weak-key kb reg-queue) a)
               (sync-from-store! kb a)
               a)))))
 
@@ -155,12 +197,28 @@
 ;; with the switch at the foot of the file.
 
 (defn- observe-add [kb sentex h]
-  (when-let [a (.get registry kb)]        ; only maintain alphas that already exist
+  (when-let [a (.get registry (weak-key kb))]  ; only maintain alphas that already exist
     (swap! a alpha-add* sentex h)))
 
 (defn- observe-remove [kb sentex]
-  (when-let [a (.get registry kb)]
+  (when-let [a (.get registry (weak-key kb))]
     (swap! a alpha-remove* sentex)))
+
+(defn forget-kb!
+  "Drop `kb`'s alpha memories from the registry, and return how many facts the dropped
+  alpha held (0 when it held none).  `core/close!` calls this so a released KB's alpha
+  goes at once, and it is the `:rete-alpha` cache's `:clear`; the registry also drops a
+  KB's entry on its own once the KB is collected (`purge!`), so a caller that never closes
+  a KB still does not leak — this is the prompt release, not the only one.  A no-op unless
+  the KB has an alpha, so it is safe to call for any backend and any KB, engaged or not."
+  [kb]
+  (locking registry
+    (purge!)
+    (let [k (weak-key kb)
+          a (.get registry k)
+          n (if a (alpha-fact-count a) 0)]
+      (.remove registry k)
+      n)))
 
 (defn engage!
   "Install the store observers so every alpha stays in step with the fact set.
@@ -212,7 +270,7 @@
             ;; admitted into the alpha memories, and must never surface as a fact
             (when (and (jtms/in? (:tms kb) (:id stored))
                        (not (sx/exceptWhen-meta? (:sentence stored))))
-              (when (= (:polarity pat) (:polarity stored))
+              (when (= (sx/negative? pat) (sx/negative? stored))
                 (when-let [b (res/unify (:context pat) (:context stored)
                                         (res/unify (:sentence pat) (:sentence stored)))]
                   [(:id stored) b]))))
@@ -316,3 +374,25 @@
   []
   (alter-var-root #'chain/*matcher* (constantly res/match-pattern))
   (disengage!))
+
+;; ---- the alpha memories as a registered cache ---------------------------
+;; Rebuilt from the store on next use (`alpha-for` back-fills), so a drop costs a rebuild
+;; and never an answer — the memory-pressure guard may take one, and `:trim` drops the
+;; whole alpha rather than a slice, because a partial one would miss the facts it dropped.
+(caches/register-cache
+ {:cache    :rete-alpha
+  :label    "Rete alpha memories"
+  :scope    :kb
+  :unit     "facts"
+  :limit    nil
+  :counters nil
+  :note     (str "The RAM fact index the incremental matcher reads (opt-in: VAELII_RETE=1 "
+                 "or rete/track!) — stored facts grouped by functor and argument value, "
+                 "one set per tracked KB. Rebuilt from the store on next use, so it is "
+                 "dropped rather than trimmed; released by core/close! and reclaimed when "
+                 "the KB is collected.")
+  :read     (fn [kb] {:entries (if-let [a (.get registry (weak-key kb))]
+                                 (alpha-fact-count a)
+                                 0)})
+  :clear    (fn [kb] (forget-kb! kb))
+  :trim     (fn [kb _target] (forget-kb! kb))})

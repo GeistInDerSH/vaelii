@@ -20,8 +20,9 @@ ontology, kept honest against KB drift by
 
 A rule's sentence is an implication `(implies (and <ante> ...) <conseq>)`, in a
 context — an ordinary sentex, so it gets a handle, TMS support, and retraction
-for free (its handle is an antecedent of every justification it licenses, so
-retracting the rule sweeps them). Rules must be **range-restricted**: every
+for free (its handle is the informant of every justification it licenses, and a
+justification is valid only while its rule is believed, so retracting the rule sweeps
+them). Rules must be **range-restricted**: every
 consequent variable appears in an antecedent, so a fired consequent is ground.
 
 A rule is polycanonicalized when what it says is not about one rule, and there are
@@ -2014,9 +2015,13 @@ Built-in provers (`default-provers`, held per-KB in an atom):
   declaration, which would route every `arg` lookup in the KB through the general
   machinery. `:compute`, partial (50) — it augments the stored declaration `FactProver`
   already answers. See [argtypes.md](argtypes.md).
+- **AdmitsArgnumProver** — `(admitsArgnum P n)`, whether a well-formed application of `P`
+  has a positive position `n`, computed from `P`'s declared `arity` and its `variable_arity`
+  mark (`admits-position?`) rather than read from a stored fact — the one query reader of
+  `admitsArgnum`. Ground relation and position only. `:lookup`, complete (100).
 - **FactProver** — index matches (`matches-visible`). Partial (50).
 
-Twenty in all, and `provers/registry` is the live list — an application's own
+Twenty-three in all, and `provers/registry` is the live list — an application's own
 provers sit beside them in the same atom.
 
 **No prover expands a rule.** Rule search is `core/query`'s, at a depth the caller

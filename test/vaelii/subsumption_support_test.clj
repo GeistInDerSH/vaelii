@@ -62,8 +62,8 @@
     (v/assert kb (list 'implies (list parentOf '?x '?y) (list ancestorOf '?x '?y)) 'CxUniverse {:direction :forward})
     (v/assert kb (list parentOf Tom Bob) 'CxUniverse)
     (let [derived (v/handle-of kb (list ancestorOf Tom Bob) 'CxUniverse)]
-      (is (= 2 (count (:antecedents (first (v/supporting-justifications kb derived)))))
-          "the fact and the rule, and nothing else"))))
+      (is (= 1 (count (:antecedents (first (v/supporting-justifications kb derived)))))
+          "the fact, and nothing else beside the rule it names as informant"))))
 
 (tu/deftest-kb every-edge-on-the-path-is-named
   ;; subsumption is transitive, so a two-step climb rests on two edges and either one

@@ -37,30 +37,34 @@ are the three sources always offered on the `/kbs` page, so you can load any of 
 
 ## Both OpenCyc routes start with the reader on the classpath
 
-In a released tree, `+with-foreign` names the released reader, which Clojars carries,
-so prefixing a command with it resolves the reader and there is nothing to install:
+Nothing in the engine ships a reader, so both routes below start with putting one on the
+classpath. Two ways do that, and they are worth knowing apart.
+
+**`scripts/link-checkouts.sh`** makes `checkouts/vaelii-foreign` and resolves the readers
+from live source, needing no install at all:
 
 ```sh
-lein with-profile +with-foreign run -m vaelii.web
+scripts/link-checkouts.sh
+lein run -m vaelii.web
 ```
 
-Two other routes exist and are worth knowing apart.
+The cost is that a checkout is on every command's classpath, so the build stops matching a
+shipped one; [foreign.md](foreign.md) has the trade in full.
 
-**In the development tree**, `+with-foreign` names a snapshot version, which
-Clojars does not carry, so it comes out of `~/.m2` and you put it there yourself:
+**An ad-hoc dependency add** names a published jar for the one command you prefix, without
+a checkout:
 
 ```sh
-cd ../vaelii-foreign && lein install
+lein update-in :dependencies conj \
+  '[com.vaelii/vaelii-foreign "RELEASE" :exclusions [com.vaelii/vaelii]]' -- run -m vaelii.web
 ```
 
-Re-run that after any change to the plugin. The profile resolves the **installed** jar,
-so a stale snapshot does not fail loudly — it silently lacks whatever namespaces were
-added since.
-
-**`scripts/link-checkouts.sh`** is the way out of that entirely: `checkouts/vaelii-foreign`
-resolves the readers from live source and needs no install at all. The cost is that a
-checkout is on every command's classpath, so the build stops matching a shipped one;
-[foreign.md](foreign.md) has the trade in full.
+`"RELEASE"` takes Clojars' latest; name a concrete version to pin one. A snapshot you are
+developing is not on Clojars, so `lein install` it from the plugin first (`cd
+../vaelii-foreign && lein install`) and name that version — a stale install does not fail
+loudly, it silently lacks whatever namespaces were added since. `scripts/with-foreign.sh`
+wraps this command, defaulting the task to `browser` and reading `FOREIGN_VERSION` for the
+pin.
 
 ## cyc-tiny, which is the small honest example
 
@@ -80,7 +84,7 @@ a reason apiece. Then, back in the engine:
 
 ```sh
 cd ../vaelii
-lein with-profile +with-foreign browser
+scripts/link-checkouts.sh && lein browser
 ```
 
 `/kbs` → the **cyc-tiny** card → Load, at the default `ontology` profile. Ready in a few
@@ -193,9 +197,9 @@ appear on the next page load with no restart — `sources` is recomputed per cal
 
 Four failures, each of which reads as something other than its cause:
 
-* **No `+with-foreign`.** The load fails with `:no-foreign-reader`, naming the kind. The
-  KB is still *offered*, because "I cannot read this" is a load that says so rather than a
-  KB that quietly stops being listed.
+* **No reader on the classpath.** The load fails with `:no-foreign-reader`, naming the
+  kind. The KB is still *offered*, because "I cannot read this" is a load that says so
+  rather than a KB that quietly stops being listed.
 * **A stale plugin jar**, which only a snapshot build can be. The same shape of
   failure, or a namespace that is simply not there. `lein install` in the plugin again.
 * **The catalog pointed at an unconverted dump.** It is not offered at all, and nothing

@@ -22,8 +22,9 @@ program for it. Read the two structural sections before the tables.
 | `{h(X)} :- b(X).` | `set/assumptionRule` | a choice, and the only thing a solve is free to pick |
 | `h(X) :- a(X) ; b(X).` | `(implies (or (a ?x) (b ?x)) (h ?x))` | a body disjunction, stored as one rule per alternative rather than solved |
 | `:- b(X).` | `set/hardConstraint` | renders as a genuine integrity constraint; the model is excluded |
-| `:~ b(X). [w@l]` | `set/softConstraint` | a violation atom and a `#minimize` at that level |
-| `not a(item)` | `(unknown (a Item))` | a query operator, ground-only, storing nothing |
+| `:~ b(X). [1@l]` | `(set/softConstraint l (implies …))` | a violation atom and a `#minimize` at level `l`; without the leading `l` the level is 1 |
+| `#minimize { W@P,X : h(X), w(X,W) }.` | `(asp/minimize P ?w (and (h ?x) (w ?x ?w)))` | the weight is ordinary believed data, an integer inside the solver's 32-bit range → [solving.md](solving.md) |
+| `not a(item)` | `(unknown (a Item))` | a query operator, ground-only, storing nothing; over a **choice** head in a constraint body write `(not (a Item))` instead ([below](#negation-and-there-are-three)) |
 | `not (a(X), b(X))` over a shared variable | `(unknown (thereExists ?x (and (a ?x) (b ?x))))` | joined, so one witness satisfies both |
 | `#false :- p(X), not q(X).` over all X | `(forall ?x (implies (p ?x) (q ?x)))` | sugar for the nested NAF, in a rule body rather than as a constraint |
 | `-a` | `(not S)` | a **stored** negative sentex with its own handle, not an absence |
@@ -70,9 +71,12 @@ decided, and it is opt-in per KB:
 (v/set-solver kb :asp)          ; the default is a greedy stub that decides nothing
 ```
 
-The consequence, stated plainly: a plain rebuttal with neither side naming the
-other's case — a Nixon diamond — builds no program at all, so classification over it
-answers empty sets. That shape is exactly the one a solve cannot be demonstrated with.
+A plain rebuttal with neither side naming the other's case — a Nixon diamond — gets no
+program from `settle`, so `do/classify` has no labeling to read over it. That shape is
+exactly the one a solve cannot be demonstrated with. The read-path `(bravely S)` /
+`(cautiously S)` queries, which the `:brave-cautious` reasoner answers, classify it anyway:
+through the backend when one is reachable, and otherwise from the JTMS dependency graph →
+[labeling.md](labeling.md).
 
 ## Negation, and there are three
 
@@ -85,6 +89,16 @@ answers empty sets. That shape is exactly the one a solve cannot be demonstrated
 `exceptWhen` is the one with no ASP counterpart, and it is the idiomatic way to write a
 default here. It is undercutting defeat: the rule states its own exception, the exception
 is re-evaluated per firing, and it is never stored.
+
+**Inside a constraint body, a choice head is negated with `(not …)`.** A solve's choice
+head is two-valued: the labeling writes `(head)` for a chosen head and `(not head)` for an
+unchosen one. Over a choice head the classical negation and ASP's `not h` therefore
+coincide, and a solve reads `(not (pick ?c))` in a constraint body as "`pick(C)` is
+absent" — a body of nothing but those is an at-least-one → [solving.md](solving.md).
+Grounding reads `(unknown (pick C))` in the same place as a background literal and proves
+it against base belief. No choice head is believed in the base, so the literal holds for
+every binding and constrains nothing; `(unknown (thereExists ?c (pick ?c)))` reads the
+same way.
 
 Two constraints on `unknown` that a program would not impose. It is **ground and closed**
 — an open `(unknown (flies ?x))` is refused rather than answered — and `thereExists`
@@ -136,9 +150,9 @@ not in a consequent, not inside `exceptWhen`.
 entirely, never believed, never chained, never scanned for contradictions. The base KB is
 untouched by a solve. → [solving.md](solving.md)
 
-Optimization is a three-level objective — caller priority above defeated assumptions
-above a content-keyed tiebreak — and the tiebreak is what makes a solve deterministic
-under reordering. Atom ids are allocated in content order, never in handle order.
+Optimization is lexicographic: one level per distinct caller priority (the soft
+constraints and `asp/minimize`), above defeated assumptions, above a content-keyed
+tiebreak — and the tiebreak is what makes a solve deterministic under reordering. Atom ids are allocated in content order, never in handle order.
 
 ## The solver you already run is in here
 
@@ -159,6 +173,8 @@ a solve answers something surprising. → [asp.md](asp.md)
 | `clingo -n 0` | the `:all` mode, which is the default |
 | `clingo --enum-mode=cautious` | `(do/classify Into)`, reading `forced` |
 | the same, brave | `(do/classify Into)`, reading `supportable` |
+| `--enum-mode=cautious` for one atom of the current dilemmas, with no solve written | `(v/ask? kb '(cautiously S) ctx)`, after `(v/add-reasoner kb :brave-cautious)` |
+| the same, brave | `(v/ask? kb '(bravely S) ctx)` |
 | `#show p/1` | `(v/query kb goal ctx)` — an ordinary read → [api.md](api.md) |
 | grounding | nothing; there is no such step |
 | inspecting the ground program | `(v/last-program kb)` |
@@ -190,6 +206,8 @@ a solve answers something surprising. → [asp.md](asp.md)
   the choices** is the one count a solve does reason over: `(asp/atMost k ?v (p ?v …))` /
   `asp/atLeast` translate to a solver cardinality atom, the `{ … } <= k` you would have
   written, rather than the census `agg/count` is → [solving.md](solving.md)
+- `#sum` as a **bound**. A weighted sum exists only as an objective — `(asp/minimize P ?w
+  body)` is the `#minimize` over a data weight — and no weighted bound constrains a model
 - Multi-shot solving. A solve is one program, built from one region, answered once
 - Theory atoms and any constraint layer over integers
 

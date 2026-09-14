@@ -76,14 +76,14 @@
     (tu/with-terms [build]
       (let [h  (v/assert kb (list 'asp/atMost 2 '?c (list build '?c 'transport)) 'CxUniverse)
             sx (sentex-of kb h)
-            surface (rules/rewrap (:sentence sx) (:direction sx) (:defeasible sx)
+            surface (rules/rewrap (v/sentence-of sx) (:direction sx) (:defeasible sx)
                                   (:assumption sx) (:constraint sx))]
         (is (= 'asp/atMost (first surface)) "the surface wrapper comes back, not set/hardConstraint")
         (is (= 2 (second surface)) "and the bound")
         (let [soft (v/assert kb (list 'asp/softAtMost 2 '?c (list build '?c 'transport)) 'CxUniverse)
               ssx  (sentex-of kb soft)]
           (is (= 'asp/softAtMost
-                 (first (rules/rewrap (:sentence ssx) (:direction ssx) (:defeasible ssx)
+                 (first (rules/rewrap (v/sentence-of ssx) (:direction ssx) (:defeasible ssx)
                                       (:assumption ssx) (:constraint ssx))))))))))
 
 ;; ---- 2. end to end: the bound prunes the models --------------------------

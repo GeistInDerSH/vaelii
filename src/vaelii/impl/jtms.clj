@@ -6,7 +6,7 @@
   Each TMS *node* corresponds to a datum (a sentex handle) and records: its label
   (IN/OUT), whether it is a premise (and at what assumption *strength*), its
   derivation depth, the justifications that conclude it (:supports), and the
-  justifications that use it as an antecedent (:consequences).
+  justifications that use it as an antecedent or name it as their rule (:consequences).
 
   A node holds **no reference to the sentex it labels** — only its handle.  The record
   store is where a sentex lives, so a copy here would be a second one to keep in step;
@@ -122,18 +122,51 @@
             [vaelii.impl.strength :as strength]))
 
 ;; A justification's `strength` is the defeat-class it confers, capping the derived
-;; datum's class (:monotonic for a bare rule, :default for a defeasible one); `out` is
-;; reserved for negation-as-failure antecedents (unused today, empty set).
-(defrecord Justification [id informant antecedents consequence bindings strength out])
+;; datum's class (:monotonic for a bare rule, :default for a defeasible one).
+;;
+;; `informant` is a rule handle or a symbol (`:premise`, `rewriteOf`, a special
+;; predicate's name).  A rule handle is an **implicit antecedent**: `valid?` needs the
+;; rule believed, and the adjacency lists the justification under the rule's node, so
+;; retracting or defeating a rule withdraws everything it licensed.  The record names the
+;; rule once, in `informant`; `antecedents` never repeats it (`without-informant`), and
+;; `rests-on` is the two together.
+(defrecord Justification [id informant antecedents consequence bindings strength])
+
+(defn- without-informant
+  "`antecedents` as a vector, with a rule-handle `informant` taken out of it.  A firing
+  hands over its handle list with the rule in it (`chain/derive-conclusion`), and so does
+  a seven-field frame on disk (`codec/decode-justification`); both store the rule once."
+  [informant antecedents]
+  (if (integer? informant)
+    (into [] (remove #(= informant %)) antecedents)
+    (vec antecedents)))
+
+(defn rests-on
+  "Every handle justification `j` needs believed to be valid: its antecedents, plus its
+  informant when that is a rule handle.  The sweep preview, `why-not`'s missing list, the
+  visibility check and recovery's storedness check read this."
+  [j]
+  (let [inf (:informant j)]
+    (cond-> (vec (:antecedents j)) (integer? inf) (conj inf))))
+
+(defn- reduce-rests-on
+  "`(reduce f init (rests-on j))` without the vector: the adjacency writes run once per
+  justification added or swept, and the add is the hottest write path there is."
+  [f init j]
+  (let [acc (reduce f init (:antecedents j))
+        inf (:informant j)]
+    (if (integer? inf) (f acc inf) acc)))
 
 (defn ->just
-  "Construct a Justification, defaulting `strength` to :monotonic and out to #{} — a bare
-  monotone justification adds no defeasibility of its own, so `conferred-class` caps it at
-  its weakest antecedent."
+  "Construct a Justification, defaulting `strength` to :monotonic — a bare monotone
+  justification adds no defeasibility of its own, so `conferred-class` caps it at its
+  weakest antecedent.  A rule-handle informant is taken out of `antecedents`
+  (`without-informant`)."
   ([id informant antecedents consequence bindings]
    (->just id informant antecedents consequence bindings :monotonic))
   ([id informant antecedents consequence bindings strength]
-   (->Justification id informant antecedents consequence bindings (or strength :monotonic) #{})))
+   (->Justification id informant (without-informant informant antecedents) consequence
+                    bindings (or strength :monotonic))))
 
 (defn graph-just
   "The part of a justification the **network** is made of — everything except the
@@ -148,13 +181,13 @@
   holding a second copy of every justification.  Measured (`lein bench-jtms`, a
   rules-heavy corpus at 3.6 justifications per node): 80 of 277 B each.
 
-  It also **normalizes** — antecedents to a vector, `out` to a set, strength
+  It also **normalizes** — antecedents to a vector without the informant, strength
   defaulted — so that however a caller spells a justification, the two
   representations store a value equal to each other's.  `:bindings` is nil rather
   than dropped, keeping the record shape fixed for every reader."
   [j]
-  (->Justification (:id j) (:informant j) (vec (:antecedents j)) (:consequence j)
-                   nil (or (:strength j) :monotonic) (set (:out j))))
+  (->Justification (:id j) (:informant j) (without-informant (:informant j) (:antecedents j))
+                   (:consequence j) nil (or (:strength j) :monotonic)))
 
 ;; ---- labelling ----------------------------------------------------------
 
@@ -175,14 +208,13 @@
   "Is justification `j` currently satisfied under the IN set `in` and the blocked set
   `blocked`?
 
-  Three independent conditions: every antecedent believed, no negation-as-failure
-  antecedent believed (the `:out` slot, reserved and empty — nothing writes one, and
-  `io.import` refuses a dump frame that carries one), and the justification not blocked
-  by its rule's exception."
+  Three independent conditions: every antecedent believed, the rule believed when the
+  informant is a rule handle, and the justification not blocked by its rule's exception."
   [j in blocked]
-  (and (every? #(contains? in %) (:antecedents j))
-       (not-any? #(contains? in %) (:out j))
-       (not (contains? blocked (:id j)))))
+  (let [inf (:informant j)]
+    (and (every? #(contains? in %) (:antecedents j))
+         (or (not (integer? inf)) (contains? in inf))
+         (not (contains? blocked (:id j))))))
 
 (defn- conferred-class
   "The defeat-class a valid justification confers on its consequence: its own
@@ -193,9 +225,9 @@
   known-true facts concludes a monotonic, which is correct: it *is* monotonically
   entailed.
 
-  The **informant is excluded from the cap**.  A rule is one of its own
-  justification's antecedents, which is what makes retracting or defeating the rule
-  withdraw everything it licensed — but that is a *validity* role, not a ground.
+  The **informant is not in the cap**.  A rule-handle informant is a condition of
+  `valid?`, which is what makes retracting or defeating the rule withdraw everything it
+  licensed — a *validity* role, not a ground, and `antecedents` never lists it.
   Capping on it as well would fold the rule's assumption strength into every
   conclusion — and a rule takes `:default` unless its own assertion says otherwise,
   exactly as a fact does, so that alone would put every datum an ordinary rule
@@ -205,7 +237,7 @@
   [j classes]
   (reduce (fn [c a] (strength/min c (get classes a :default)))
           (or (:strength j) :monotonic)
-          (remove #(= % (:informant j)) (:antecedents j))))
+          (:antecedents j)))
 
 (defn- node-class
   "The defeat-class of an IN datum: the strongest support it has — its premise
@@ -424,12 +456,12 @@
       (resettle [datum])))
 
 (defn- add-just* [state j]
-  (let [{:keys [id antecedents consequence] :as just} (graph-just j)
+  (let [{:keys [id consequence] :as just} (graph-just j)
         state (-> state
                   (assoc-in [:justs id] just)
                   (update-in [:nodes consequence :supports] conj id)
-                  (as-> s (reduce (fn [st a] (update-in st [:nodes a :consequences] conj id))
-                                  s (concat antecedents (:out just)))))
+                  (as-> s (reduce-rests-on (fn [st a] (update-in st [:nodes a :consequences] conj id))
+                                           s just)))
         in    (:in state #{})]
     ;; Fast path — a *redundant* justification changes nothing, so skip the region relabel.
     ;; If `consequence` is already believed and this justification confers no stronger a
@@ -469,10 +501,10 @@
       (resettle state [consequence]))))
 
 (defn- restrength-informant* [state informant strength]
-  ;; The rule handle is an antecedent of every justification it informs (a firing
-  ;; conjoins it — that is what makes retracting the rule withdraw its conclusions),
-  ;; so its node's `:consequences` adjacency is the candidate set and nothing scans
-  ;; the whole `:justs` map.  The informant filter keeps out a justification that
+  ;; The adjacency lists every justification a rule informs under the rule's node
+  ;; (`reduce-rests-on` in `add-just*` — the link that makes retracting the rule withdraw
+  ;; its conclusions), so the node's `:consequences` is the candidate set and nothing
+  ;; scans the whole `:justs` map.  The informant filter keeps out a justification that
   ;; merely *uses* the rule's handle as an ordinary antecedent.
   (let [jids  (into []
                     (filter #(= informant (get-in state [:justs % :informant])))
@@ -532,7 +564,7 @@
                          suspects)
         ;; The justifications that touch a dead datum are exactly the ones its node
         ;; already names: `:supports` (it is their consequence) and `:consequences`
-        ;; (it is one of their antecedents, or an :out antecedent).  Reading the two
+        ;; (it is one of their antecedents, or their rule).  Reading the two
         ;; adjacency sets keeps this proportional to the swept region — scanning
         ;; `:justs` instead would make every sweep cost the whole graph, which is the
         ;; locality invariant this module is built on (docs/nmtms.md).
@@ -551,14 +583,14 @@
         removed-sentexes   (vec dead)
         ;; 5. apply removals to the graph
         state (reduce (fn [st jid]
-                        (let [{:keys [antecedents consequence out]} (get-in st [:justs jid])]
+                        (let [{:keys [consequence] :as j} (get-in st [:justs jid])]
                           (-> st
                               (update :justs dissoc jid)
                               (update-in [:nodes consequence :supports] #(disj (or % #{}) jid))
-                              (as-> s (reduce (fn [s2 a]
-                                                (update-in s2 [:nodes a :consequences]
-                                                           #(disj (or % #{}) jid)))
-                                              s (concat antecedents out))))))
+                              (as-> s (reduce-rests-on (fn [s2 a]
+                                                         (update-in s2 [:nodes a :consequences]
+                                                                    #(disj (or % #{}) jid)))
+                                                       s j)))))
                       state dead-jids)
         state (update state :nodes dissoc-all dead)
         state (update state :classes dissoc-all dead)
@@ -974,9 +1006,12 @@
 (defn- just-key
   "The content `has-justification?` deduplicates on — the informant plus the
   antecedents **as a set**, `same-antecedents?`'s judgement (order and duplicates
-  immaterial) frozen into one hashable value."
+  immaterial) frozen into one hashable value.  A rule-handle informant is dropped from
+  the set: a stored record never lists it there, and a firing's handle list does."
   [informant antecedents]
-  [(unbox informant) (set antecedents)])
+  (let [inf (unbox informant)
+        s   (set antecedents)]
+    [inf (if (integer? inf) (disj s inf) s)]))
 
 (defn- dedup-keys
   "The cached key set for `consequence`, built from its supports on the first ask."
@@ -998,12 +1033,13 @@
   [tms informant antecedents consequence]
   (if-let [^java.util.Map cache (dedup-cache-for tms)]
     (.contains (dedup-keys tms cache consequence) (just-key informant antecedents))
-    (boolean
-     (some (fn [jid]
-             (let [j (-justification tms jid)]
-               (and (= informant (:informant j))
-                    (same-antecedents? antecedents (:antecedents j)))))
-           (-supports tms consequence)))))
+    (let [antes (without-informant informant antecedents)]
+      (boolean
+       (some (fn [jid]
+               (let [j (-justification tms jid)]
+                 (and (= informant (:informant j))
+                      (same-antecedents? antes (:antecedents j)))))
+             (-supports tms consequence))))))
 
 ;; Every mutating entry point below bumps `observe/note-change` — the coarse clock a
 ;; cache derived from *belief* stamps itself with (the qualitative constraint networks
@@ -1125,6 +1161,88 @@
   affect them and what follows from them, so a settle that defeated nothing last
   round does no work at all here."
   [tms] (observe/note-change) (-clear-defeats tms) tms)
+
+(defn grounded-in-region
+  "For `extra` — datums to force OUT — the forward consequence closure of `extra`
+  (`:region`) and, within it, the datums that stay believed once `extra` is disbelieved
+  (`:in`), the rest of the graph held at its current label.
+
+  Read **region-local**: belief for a datum outside the region is taken per-datum from
+  `in?`, never materialized, so cost is proportional to the region and not to the KB — the
+  property that keeps `classify-local` linear in the number of dilemmas rather than
+  quadratic (`grounded_forcing_out_test`).  The walk mirrors `affected-region` over the
+  closure and the fixpoint mirrors `region-fixpoint` over it, both restricted to the
+  region.  Built on the protocol reads (`in?`, `dependents`, `supports`, `justification`,
+  `premise?`, `defeated`, `blocked`, `superseded?`), so both network representations answer
+  it identically without either implementing a method — the derived-read footing `revived`
+  has.
+
+  The read behind the solve-free skeptical/credulous bracket
+  (`vaelii.impl.asp.label/classify-local`, docs/labeling.md) and behind
+  `grounded-forcing-out`."
+  [tms extra]
+  (let [extra       (set extra)
+        forced?     (let [f (into (set (defeated tms)) extra)] #(contains? f %))
+        blocked-set (blocked tms)
+        just-of     #(justification tms %)
+        ;; raw belief for a boundary datum: reported belief plus the superseded spellings
+        ;; the fixpoint keeps IN (their twin is justified by them).
+        raw-in?     (fn [d] (or (in? tms d) (superseded? tms d)))
+        ;; forward consequence closure of `extra`, seeds included — the only datums a
+        ;; forced-out member can move.
+        region      (loop [seen #{}, stack (vec extra)]
+                      (if (empty? stack)
+                        seen
+                        (let [d (peek stack), stack (pop stack)]
+                          (if (contains? seen d)
+                            (recur seen stack)
+                            (recur (conj seen d)
+                                   (into stack (comp (keep just-of) (map :consequence))
+                                         (dependents tms d)))))))
+        ;; an antecedent in the region reads the recomputed set; outside it, live belief
+        believed?*  (fn [in d] (if (contains? region d) (contains? in d) (raw-in? d)))
+        valid-here? (fn [in j] (and (every? #(believed?* in %) (:antecedents j))
+                                    (let [inf (:informant j)]
+                                      (or (not (integer? inf)) (believed?* in inf)))
+                                    (not (contains? blocked-set (:id j)))))
+        ;; region premises seed the fixpoint unless forced out
+        seed        (into #{} (filter #(and (premise? tms %) (not (forced? %)))) region)
+        ;; the justifications that can conclude something in the region
+        cands       (into [] (comp (mapcat #(supports tms %)) (distinct) (keep just-of)) region)
+        in          (loop [in seed, stack (vec cands)]
+                      (if (empty? stack)
+                        in
+                        (let [j (peek stack), stack (pop stack), c (:consequence j)]
+                          (if (and (contains? region c)
+                                   (not (contains? in c))
+                                   (not (forced? c))
+                                   (valid-here? in j))
+                            (recur (conj in c)
+                                   (into stack (keep just-of) (dependents tms c)))
+                            (recur in stack)))))]
+    {:region region :in in}))
+
+(defn grounded-forcing-out
+  "The believed datums recomputed with every datum in `extra` **forced OUT**, the rest of
+  the graph held at its current label — a non-mutating read of what belief would be if
+  `extra` were disbelieved.  Equal to the believed set after `(defeat tms extra)` on a
+  network with nothing else defeated, computed without touching the network
+  (`grounded-forcing-out-equals-defeat` pins it).
+
+  The recompute is region-local (`grounded-in-region`); splicing its region-in-set into
+  belief outside the region is the one ordinary belief read, the cost `in-datums` has.  A
+  caller that needs only the region — `classify-local` — reads `grounded-in-region`
+  directly and pays neither."
+  [tms extra]
+  (if (empty? (seq extra))
+    (set (in-datums tms))
+    (let [{:keys [region in]} (grounded-in-region tms extra)
+          supersede (set (keys (superseded tms)))]
+      ;; boundary belief (outside the region) is unchanged — take it from `in-datums`; the
+      ;; region's own belief is `in`.  Both drop the superseded spellings, as `in?` does.
+      (into (into #{} (remove #(or (contains? region %) (contains? supersede %))) (in-datums tms))
+            (remove supersede)
+            in))))
 
 (defn retract!
   "Dependency-directed retraction (drop premise / relabel / sweep).  Returns

@@ -123,7 +123,7 @@
   [kb sentence]
   (walk/postwalk (fn [x]
                    (if-let [id (sx/handle-id x)]
-                     (list 'sentexHandle (:sentence (v/sentex kb id)))
+                     (list 'sentexHandle (v/sentence-of (v/sentex kb id)))
                      x))
                  sentence))
 
@@ -259,7 +259,7 @@
   rather than merely consistent."
   [kb]
   (set (for [h (p/sentex-ids (:records kb))
-             :let [s (:sentence (v/sentex kb h))]
+             :let [s (v/sentence-of (v/sentex kb h))]
              :when (and (seq? s) (= 'exceptWhen (first s)))]
          [h (first (keep sx/handle-id (tree-seq sequential? seq s)))])))
 
@@ -556,13 +556,12 @@
             (is (zero? (v/sentex-count target))))))
       (finally (rm-rf! dump)))))
 
-(deftest a-dump-that-fills-the-reserved-out-slot-is-refused
-  ;; A justification frame is the record's field map, so it carries `:out` — the
-  ;; negation-as-failure antecedent set, which the engine reserves and never writes
-  ;; (docs/naf.md).  The round trip therefore carries the slot, and this entry point is the only
-  ;; place a filled one could enter the store.  Three relabel invariants read it as empty
-  ;; rather than reading it, so an imported one would move belief silently and
-  ;; differently on every relabel; refused here, where the frame is still legible.
+(deftest a-dump-that-carries-an-out-list-is-refused
+  ;; A justification frame is a field map, so a dump can carry an `:out` key — a
+  ;; negation-as-failure antecedent set, which a `Justification` has no slot for
+  ;; (docs/naf.md).  This entry point is the only place a filled one could reach the
+  ;; store.  Imported without it, the justification would support its conclusion where
+  ;; the exporting KB's did not, so it is refused here, where the frame is still legible.
   ;;
   ;; And refused **before the import writes anything**, which is the other half of what
   ;; a refusal means: the frames come off a file, so the check reads them in a pre-pass
@@ -584,7 +583,7 @@
               stored (fn [] [(count (p/sentex-ids (:records kb)))
                              (count (p/justification-ids (:records kb)))])]
           (is (seq frames) "the fixture derived something, so there is a frame to fill")
-          (is (= #{} (:out victim)) "and the writer wrote the slot empty, as it always does")
+          (is (not (contains? victim :out)) "and the writer writes no :out key")
           (frames/write-frames! f
                                 (cons (assoc victim :out #{(:consequence victim)})
                                       (rest frames))
@@ -669,8 +668,7 @@
                  :antecedents [(:id meta-fr)]
                  :consequence (:id plain)
                  :bindings    {}
-                 :strength    :monotonic
-                 :out         #{}}
+                 :strength    :monotonic}
         ;; the same, plus a sentex this dump never carried: dropped either way, so the
         ;; deletion is not what cost it and the orphan count must not claim it
         doomed  (assoc jframe :id (inc next-j)
@@ -874,7 +872,7 @@
                   summary (imp/import-dump target dump {:belief? false})]
               (testing "every sentence comes back spelling-identical"
                 (is (= (set foreign-dialect)
-                       (set (map #(:sentence (v/sentex target %))
+                       (set (map #(v/sentence-of (v/sentex target %))
                                  (p/sentex-ids (:records target)))))))
               (testing "and each is findable by the name that broke the convention"
                 (doseq [t '[mining' game-theory choriocarcinoma'

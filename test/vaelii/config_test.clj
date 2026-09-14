@@ -81,9 +81,10 @@
    ;; did nothing is the failure the refusal exists to close
    ["vaelii.index.snapshot" "enabled"]
    ["vaelii.index.snapshot" "true"]
-   ;; a switch that is read only at its call site refuses inside `recover`, where the
-   ;; operator sees a failed rebuild rather than the typo that caused it
+   ;; likewise the belief image, which a `{:backend :disk-snapshot}` KB writes and installs
+   ;; with no switch, so every spelling is refused
    ["vaelii.belief.snapshot" "enabled"]
+   ["vaelii.belief.snapshot" "true"]
    ["vaelii.asp.solver" "clingoo"]
    ;; `Long/parseLong` with no catch, in a top-level `def`
    ["vaelii.disk.cache" "64k"]

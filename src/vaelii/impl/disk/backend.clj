@@ -174,6 +174,50 @@
                       (assoc :snapshot save-fn)
                       (assoc-in [:dur-ids :snapshot] id))))))))
 
+(defn replace-index-snapshot!
+  "Make `save-fn` `dir`'s derived-index snapshot writer, replacing the one
+  `register-index-snapshot!` kept.  A KB recording an operation log writes its images only
+  as a seal (`vaelii.impl.seal`), so it takes over the writer `open-kb` registered — the
+  one `close-dir!`, the JVM-shutdown path and `maybe-refresh-index-snapshot!` all run."
+  [dir save-fn]
+  (let [cdir (canonical-dir dir)]
+    (locking stores
+      (when-let [old (get-in @stores [cdir :dur-ids :snapshot])]
+        (dur/deregister! old))
+      (let [id (dur/register! {:fsync (fn [_] nil)
+                               :close save-fn
+                               :phase :image
+                               :label (str "index-snapshot " cdir)})]
+        (swap! stores update cdir
+               #(-> (or % {:dir cdir :dur-ids {}})
+                    (assoc :snapshot save-fn)
+                    (assoc-in [:dur-ids :snapshot] id)))))))
+
+(defn register-belief-image!
+  "Register `save-fn` (a thunk) as `dir`'s belief image writer, run at the front of
+  `close-dir!` beside the index image's and on JVM shutdown in the same `:image` phase —
+  the belief image is stamped against these records too, so it is written while they are
+  open.
+
+  **The latest registration replaces the one before it**, where the index image's first
+  registration stands.  The index is shared by every KB over a directory, and belief is
+  not: it lives in the KB that recovered it, and a second KB opened over a directory is
+  the one that has the current belief — the first one's writes are invisible to it
+  (docs/storage.md, the single-writer contract)."
+  [dir save-fn]
+  (let [cdir (canonical-dir dir)]
+    (locking stores
+      (when-let [old (get-in @stores [cdir :dur-ids :belief-image])]
+        (dur/deregister! old))
+      (let [id (dur/register! {:fsync (fn [_] nil)
+                               :close save-fn
+                               :phase :image
+                               :label (str "belief-image " cdir)})]
+        (swap! stores update cdir
+               #(-> (or % {:dir cdir :dur-ids {}})
+                    (assoc :belief-image save-fn)
+                    (assoc-in [:dur-ids :belief-image] id)))))))
+
 (defn maybe-refresh-index-snapshot!
   "Rewrite `cdir`'s index image if the live index has drifted past the threshold.
 
@@ -269,7 +313,7 @@
   [dir]
   (let [cdir (canonical-dir dir)]
     (locking stores
-      (when-let [{:keys [records index overlay-meta snapshot dur-ids]} (@stores cdir)]
+      (when-let [{:keys [records index overlay-meta snapshot belief-image dur-ids]} (@stores cdir)]
         ;; Deregister first: it is the signal a task the compaction executor has queued
         ;; but not started reads, so it turns every waiting rewrite of this directory
         ;; into a skip rather than something to wait out.  It also stops the next daemon
@@ -298,6 +342,9 @@
                               :msg (str "disk backend: the index snapshot for " cdir
                                         " was not written (" (.getMessage t)
                                         ") — the next open rebuilds from the records")}))))
+        ;; the belief image under the same two conditions, and `save!` logs and swallows
+        ;; its own failure
+        (when belief-image (belief-image))
         (let [failures (into []
                              (keep identity)
                              [(when records

@@ -104,6 +104,7 @@
   search-tree
   "[[conn goal] [conn goal context] [conn goal context opts]]",
   sees? "[[conn k y]]",
+  sentence-of "[[conn sx]]",
   sentex "[[conn handle]]",
   sentex-count "[[conn]]",
   sentexes-in-context "[[conn context] [conn context opts]]",
@@ -271,6 +272,7 @@
   search-tree "[[kb goal] [kb goal context] [kb goal context opts]]",
   search-tree-opt-keys :var,
   sees? "[[kb k y]]",
+  sentence-of "[[sx]]",
   sentex "[[kb handle]]",
   sentex-count "[[kb]]",
   sentex-handle "[[n]]",

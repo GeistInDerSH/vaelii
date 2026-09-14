@@ -330,10 +330,11 @@
 
 (deftest sees?-agrees-with-reference-over-cyclic-context-graphs
   ;; The `genlCx` twin of the test above, with the acyclicity restriction lifted —
-  ;; a context cycle is admitted, because `genlMt` states them and mutual visibility is
-  ;; a claim rather than a contradiction.  So the edge generator is free to point
-  ;; either way, every trial closes cycles and splits them again, and `sees?` is
-  ;; checked for **every ordered pair** against the reference closure.
+  ;; `wff` refuses a context cycle at assert, but the taxonomy must still hold one a
+  ;; recovered or foreign store presents, and this exercises the taxonomy layer directly
+  ;; (`tax/add-genlCx`), past that check.  So the edge generator is free to point either
+  ;; way, every trial closes cycles and splits them again, and `sees?` is checked for
+  ;; **every ordered pair** against the reference closure.
   ;;
   ;; That is the gate on the condensation potential.  A stale component would answer
   ;; *true* for a pair a deletion has just separated; a stale depth would answer

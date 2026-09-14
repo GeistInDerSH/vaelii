@@ -239,13 +239,14 @@ the existential unsatisfiable, so the `unknown` holds and "all of Bob's children
 asleep" is true. That is the classical reading of a universal over an empty domain, and
 it is what falls out of the desugar rather than a case decided separately.
 
-A `forall` an arriving fact can **release** is the one place the maintenance differs from
-a plain `unknown`. `(unknown S)` is antitone: a fact can only make `S` derivable, so it
-can only block. A nested one is not — an arriving `(asleep Kid3)` removes the witness the
-inner query had found — so the rule is owed a fresh join whether or not the blocked set
-moved, exactly as an aggregate is (`rules/arrival-releasable?`,
-`settle/rejoin-on-arrival-rules`, and the same exemption at the two taxonomy edge
-triggers).
+A `forall` an arriving fact can **release** directly is the one place the maintenance
+differs from a plain `unknown`. `(unknown S)` is antitone in what a fact states: an
+arriving `S` can only make `S` derivable, so it can only block, and the one arrival that
+releases it does so through a defeat of a believed `S`, which the settle handles (below).
+A nested one is not antitone — an arriving `(asleep Kid3)` removes the witness the inner
+query had found — so the rule is owed a fresh join whether or not the blocked set moved,
+exactly as an aggregate is (`rules/arrival-releasable?`, `settle/rejoin-on-arrival-rules`,
+and the same exemption at the two taxonomy edge triggers).
 
 ### Evaluated in the placement context, not the join
 
@@ -392,6 +393,13 @@ leaves. This is the `exceptWhen` block/sweep/revive path, reused verbatim:
 - `retract!` captures the rules whose NAF condition a retraction *released* and
   re-chains them, so a revival — which is a re-derivation, not a flipped bit — is
   visible by the time it returns.
+- A **defeat** releases too, with nothing stored or removed: a monotonic `(not (happy
+  Zed))` arriving after a firing was blocked and swept defeats the default `(happy Zed)`,
+  so `(unknown (happy Zed))` holds again. The swept firing left no blocked justification
+  and no refusal record to re-ask, so the settle pass that newly defeats a datum re-chains
+  every rule watching its predicate (`settle/released-by-defeat`, keyed as
+  `special/rules-watching` keys an arrival). A defeat the previous settle already applied
+  re-chains nothing.
 
 The settle-time firing filter (`firing-reachable?`) shapes the exception's conjuncts
 and the `unknown` antecedents' inner queries the same way: a ground inner narrows
@@ -412,44 +420,38 @@ negation — one rule's `unknown` depends on what another concludes and back —
 `unknown` on what the rule concludes) and a cycle a `genl` edge would close. Ordinary
 positive recursion is untouched.
 
-## The `out` tracking decision — why nothing is stored
+## The out-list decision — why nothing is stored
 
-The JTMS `Justification` carries an `:out` slot — a **negation-as-failure antecedent
-set** ([nmtms.md](nmtms.md)): a justification is invalid if any of its `:out` datums is
-IN. This is Doyle's out-list, and it is the textbook home for `unknown`. It stays
-**reserved and unused**, and NAF is maintained by **re-evaluation** instead. The
-reasons are the ones [exceptions.md](exceptions.md) already gives for `exceptWhen`,
-plus one that is decisive:
+Doyle's JTMS gives a justification an **out-list** — a negation-as-failure antecedent
+set: a justification is invalid if any of its out-list datums is IN. It is the textbook
+home for `unknown`. A Vaelii `Justification` has **no out-list** ([nmtms.md](nmtms.md)),
+and NAF is maintained by **re-evaluation** instead. The reasons are the ones
+[exceptions.md](exceptions.md) already gives for `exceptWhen`, plus one that is
+decisive:
 
 - **An existential NAF has no handle.** `(unknown (thereExists ?x (parentOf ?x Tom)))`
   is negation over a *pattern*, not a proposition. There is no single node whose
-  OUT-ness stands for "nobody is a parent of Tom", so the `:out` slot — a set of
-  handles — simply cannot represent it. The moment `thereExists` enters, the out-list
-  is the wrong shape.
-- **It stores the negative space.** Using the slot for the ground case
+  OUT-ness stands for "nobody is a parent of Tom", so an out-list — a set of handles —
+  cannot represent it. The moment `thereExists` enters, the out-list is the wrong shape.
+- **An out-list stores the negative space.** Using one for the ground case
   `(unknown (flies Tweety))` when `(flies Tweety)` is not stored means *materializing*
   an unbelieved node for it — a probe for every proposition that happens not to hold.
   Over a large domain that is the negative space `exceptWhen` refused to store.
-- **It cannot compose with computed truth.** A level-6 answer reached through
+- **An out-list cannot compose with computed truth.** A level-6 answer reached through
   transitivity, disjointness or arithmetic has no single node to mark OUT either.
 
 So: **we do not track things that are known-false-but-not-in-the-KB as negated
 facts.** Nothing about a NAF condition is stored; it is re-evaluated on the same
-triggers an exception uses, and nothing ever *populates* the `:out` slot: the existential
-case has no single handle to put in it, so `jtms/valid?` reads the slot on every relabel
-and finds it empty. This keeps NAF
-consistent with the codebase's existing closed-world mechanism (`exceptWhen`) and the
-store free of negative space.
+triggers an exception uses. This keeps NAF consistent with the codebase's existing
+closed-world mechanism (`exceptWhen`) and the store free of negative space.
 
-**The one entry point that could fill it refuses to.** A justification frame in a dump is the
-record's field map, so the export carries `:out` and the import reads it — which makes
-`vaelii.impl.io.import` the only way a filled slot could reach a store, and it refuses
-one (`:naf-justification`). Three relabel invariants read
-the slot as empty rather than reading it: `region-fixpoint`'s semi-naive warrant is that
-`valid?` is monotone in the IN set, which a justification an arriving datum *invalidates*
-is not; the retraction sweep tears down a live justification through a dead out-datum;
-and the exception fixpoint never consults it. So "finds it empty" is a fact about every
-KB rather than about every KB this engine built alone.
+**A dump cannot add one.** A justification frame in a dump is a field map, so a frame
+can carry an `:out` key, and `vaelii.impl.io.import` refuses a non-empty one
+(`:naf-justification`): imported without its out-list, the justification would support
+its conclusion where the exporting KB's did not. Two relabel invariants depend on the
+absence: `region-fixpoint`'s semi-naive warrant is that `valid?` is monotone in the IN
+set, which a justification an arriving datum *invalidates* is not; and the exception
+fixpoint reads a justification's antecedents and its rule and nothing else.
 
 `unknown` is also **belief-sensitive** for free: a stored-but-OUT `S` (a defeated
 default) is not believed, so a level-6 match skips it, so `(unknown S)` holds of a

@@ -411,6 +411,7 @@
     :torn-snapshot :truncated-dump :unauthorized :unbound-deferred :unforkable-index :unknown-backend
     :unknown-command :unknown-entry :unknown-frame :unknown-framing :unknown-handle
     :unknown-op :unknown-option :unknown-source :unknown-subscription :unknown-tactician
+    :unminted-nat
     :unparseable :unreadable :unreadable-store :unrecovered-kb :unrecovered-premise
     :unreleased :unsupported-compression :unsupported-context
     :unsupported-format :unsupported-platform :unsupported-variant :unsupported-version})

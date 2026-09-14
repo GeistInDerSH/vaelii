@@ -240,7 +240,7 @@ no `## TODO` section. `docs/` documents the engine as it is, and what gets built
 not something to commit a reader to.
 
 The distinction worth getting right: **an absence is a fact and should be documented.**
-"There is no beta network", "nothing reads the `:out` slot", a `## What is not built`
+"There is no beta network", "a justification has no out-list", a `## What is not built`
 section — write all of those, because a reader needs to know where the engine stops.
 What does not belong is the promise attached to one. "The rule index is keyed by
 predicate, not by antecedent shape" documents the engine; "keying it by shape is the
@@ -817,20 +817,13 @@ and the marker belongs on the handful that are programs rather than on the rest.
 block that reaches a model provider, a server, or the process-wide log dial never
 carries it, and the test refuses one that does.
 
-Its **versions** check holds the two coordinates this tree states twice. The
-`:with-foreign` pin and `defproject`'s own version are cut together, so a release names
-the sibling release going out beside it and a dev tree names the snapshot being cut; a
-lagging pin makes every `lein with-profile +with-foreign` command fail to resolve, and
-`lein install` in the sibling does not fix it — the sibling builds its *own* current
-version, so the install succeeds and the error is unchanged. The second pair is
-`lein-cloverage`, declared in `project.clj` and injected at the root by
-`scripts/coverage.sh`. Bump each pair in one commit; the check names the fix when you
-do not.
-
-The sibling pin carries one obligation into the release itself: the carve strips the
-snapshot suffix tree-wide, so a released tree names `vaelii-foreign` at its **own**
-version, and that version has to exist for `+with-foreign` to resolve. Publish the
-sibling release beside this one, not after it.
+Its **versions** check holds the coordinates this tree states more than once.
+`defproject`'s version reappears in the README install line and in the generated release
+badge, and the carve strips `-SNAPSHOT` tree-wide, so a dev tree says the snapshot
+everywhere and a cut says the release everywhere; a coordinate left at an older snapshot is
+the drift the check catches. The second pair is `lein-cloverage`, declared in
+`project.clj` and injected at the root by `scripts/coverage.sh`. Bump each in one commit;
+the check names the fix when you do not.
 
 ## 9. License & contributor terms
 

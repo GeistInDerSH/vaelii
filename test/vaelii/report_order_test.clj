@@ -35,7 +35,7 @@
   "What a handle says — `[sentence context]` — or a symbol informant unchanged."
   [kb h]
   (if (integer? h)
-    (let [sx (v/sentex kb h)] [(:sentence sx) (:context sx)])
+    (let [sx (v/sentex kb h)] [(v/sentence-of sx) (:context sx)])
     h))
 
 (defn- listing
@@ -121,9 +121,9 @@
 (deftest why-names-a-firings-antecedents-in-the-same-order-either-way
   ;; A two-antecedent rule is triggered by whichever of its facts arrives second, and the
   ;; trigger seeds the firing's handle vector (`chain/complete-antecedents`).  So the
-  ;; stored antecedents read `[b2 b1 rule]` one way round and `[b1 b2 rule]` the other,
-  ;; and `why`'s `:because` — a caller's proof tree — printed the two facts in whichever
-  ;; order they were typed.
+  ;; firing's handles read `[b2 b1 rule]` one way round and `[b1 b2 rule]` the other,
+  ;; and a vector stored in that order would make `why`'s `:because` — a caller's proof
+  ;; tree — print the two facts in whichever order they were typed.
   (tu/with-terms [linksTo leadsTo reaches A B C CxStory]
     (let [f1       (list linksTo A B)
           f2       (list leadsTo B C)
@@ -143,9 +143,9 @@
           "the join's two facts, in the order they say rather than the order they came")
       (is (apply = readings)
           "the proof tree reads the same whichever fact triggered the firing")
-      (testing "and the rule handle is ordered among them rather than pinned"
-        (is (= 3 (count (first (second (first readings)))))
-            "two facts and the rule that joined them")))))
+      (testing "and the rule is the informant, not one of the antecedents"
+        (is (= 2 (count (first (second (first readings)))))
+            "the two facts the rule joined")))))
 
 ;; ---- what the order costs ------------------------------------------------
 

@@ -89,7 +89,7 @@
         (is (some? h))
         (is (some? rule))
         (is (some (fn [d]
-                    (and (some #{rule} (:antecedents d))
+                    (and (= rule (:informant d))
                          (some #(= (list 'arity barRelation 3)
                                    (:sentence (v/sentex kb %)))
                                (:antecedents d))))

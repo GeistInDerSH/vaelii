@@ -177,9 +177,14 @@
               (is (= (sort (map :id sentexes)) (map :id sentexes))
                   "a dump is a function of the KB, not of map iteration order"))
 
-            (testing "each frame is exactly its record's field map"
+            (testing "each frame is exactly its record's field map, a rule's with its sentence"
+              ;; a rule record holds no sentence, and its frame carries the one
+              ;; `sentence-of` builds, so the dump format stays one shape for both readers
               (doseq [frame sentexes]
-                (is (= (into {} (v/sentex kb (:id frame))) frame)))
+                (let [rec (v/sentex kb (:id frame))]
+                  (is (= (cond-> (into {} rec)
+                           (:antecedent rec) (assoc :sentence (v/sentence-of rec)))
+                         frame))))
               (doseq [frame justifications]
                 (is (= (into {} (v/justification kb (:id frame))) frame))))
 
@@ -208,10 +213,11 @@
                      (set (keep #(when (:strength %) (:id %)) sentexes)))
                   "and a purely-derived datum carries none"))
 
-            (testing "a negative fact is a frame at :polarity :negative"
+            (testing "a negative fact is a frame whose sentence is its `(not …)`"
               (let [h (v/handle-of kb (list 'not (list happy Rex)) ctx)]
                 (is (some? h))
-                (is (= :negative (:polarity (by-id h))))
+                (is (= (list 'not (list happy Rex)) (:sentence (by-id h))))
+                (is (not (contains? (by-id h) :polarity)) "and no separate sign key")
                 (is (not (v/in? kb h)) "defeated — stored without being believed")))
 
             (testing "a defeasible rule is a frame with its decomposition and its varmap"
@@ -354,8 +360,11 @@
         (rm-rf! disk-dir)
         (tu/with-cleared-kb [mem-kb #(doto (v/open-kb tu/plain-memory-space)
                                        (tu/clear-kb!))]
+          ;; Both KBs run the network the run selects: the meta records whether a belief
+          ;; image was written, and only the dense network writes one.
           (let [store-path (.getPath ^File store-dir)
-                disk-kb    (v/open-kb {:backend :disk-log :dir store-path :recover? false})]
+                disk-kb    (v/open-kb {:backend :disk-log :dir store-path :recover? false
+                                       :tms (:tms tu/plain-memory-space)})]
             (try
               (build! mem-kb  t)
               (build! disk-kb t)
@@ -402,7 +411,7 @@
     (get-sentex [_ id]
       (vswap! fetches inc)
       (sx/->LiteralSentex (list 'synthetic (symbol (str "Ind" id))) 'CxSynthetic
-                          id :true nil))
+                          id nil))
     (get-provenance [_ _] nil)))
 
 (deftest ^:slow the-writer-never-runs-more-than-a-chunk-ahead-of-what-it-has-written

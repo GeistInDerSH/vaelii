@@ -107,18 +107,20 @@
           ch (handle-of kb youngerThan (list youngerThan Ann Bob))]
       (is (some? ch))
       (testing "the two facts and the rule support it — the comparison names nothing"
-        (is (= [#{h1 h2 rh}]
-               (mapv (comp set :antecedents) (v/supporting-justifications kb ch))))))))
+        (is (= [[#{h1 h2} rh]]
+               (mapv (juxt (comp set :antecedents) :informant)
+                     (v/supporting-justifications kb ch))))))))
 
 (tu/deftest-kb a-firing-with-only-computed-antecedents-is-supported-by-the-rule-alone
   ;; The degenerate case the placeholder question is really about: there is no fact to
-  ;; name, so the justification names the rule and nothing else.
+  ;; name, so the justification names no antecedent, only its rule as the informant.
   (tu/with-terms [theSum]
     (let [rh (v/assert kb (fwd [(list 'evaluate '?s (list '+ 1 2))] (list theSum '?s))
                        'CxNaturalWorld)
           ch (handle-of kb theSum (list theSum 3))]
       (is (some? ch))
-      (is (= [[rh]] (mapv :antecedents (v/supporting-justifications kb ch)))))))
+      (is (= [[[] rh]] (mapv (juxt :antecedents :informant)
+                             (v/supporting-justifications kb ch)))))))
 
 ;; ---- retraction ----------------------------------------------------------
 

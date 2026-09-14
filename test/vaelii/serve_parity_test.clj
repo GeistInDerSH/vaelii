@@ -138,7 +138,8 @@
       (testing "the roster is data, because two generators read the table"
         ;; a closure cannot be asked whether its first vaelii.core parameter is the KB
         ;; the daemon supplies or an argument the caller sends
-        (is (= #{:levels :calculi :readable-sentence :quality-report} serve/kbless-ops))
+        (is (= #{:levels :calculi :readable-sentence :sentence-of :quality-report}
+               serve/kbless-ops))
         (is (every? serve/ops serve/kbless-ops)))
       (testing "the retrieval stack and the shipped calculi, as data"
         (is (= 8 (count (ok-result handler :levels []))))
@@ -150,7 +151,11 @@
               sx (ok-result handler :sentex [h])
               readable (ok-result handler :readable-sentence [sx])]
           (is (some #{'?x} (tree-seq sequential? seq readable))
-              "the author's ?x came back, not ?var0")))
+              "the author's ?x came back, not ?var0")
+          (testing "and the canonical form, which the rule map no longer carries"
+            (is (not (contains? sx :sentence)) "a rule crosses the wire without :sentence")
+            (is (= (list 'implies (list dog '?var0) (list fed '?var0))
+                   (ok-result handler :sentence-of [sx]))))))
       (testing "a report renders from the map, and a map that is not one is refused"
         (let [q (ok-result handler :kb-quality [])
               md (ok-result handler :quality-report [q])]

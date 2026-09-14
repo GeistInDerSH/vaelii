@@ -1591,7 +1591,9 @@
 
 (defn arbitrating?
   "Does `kb` arbitrate a definitional clash against defeasible content rather than
-  refusing it at the entry point — and let a declaration reach back over stored content?
+  refusing it at the entry point, and ask a clash from every context that sees both of
+  its halves?  A declaration reaching back over stored content does not read this: it
+  runs under either policy (`settle/clash-candidates`).
 
   The KB's own `:constraints` policy decides when it has one (`kb/constraint-policies`
   names them); a KB that named none reads the process default, so
@@ -3172,7 +3174,7 @@
   by `consequent-predicate` — which spells a negation `not` where the index key spells
   it `[:not pred]` (`rules/dependency-predicates`)."
   [kb handle rule-sentex]
-  (let [antes (rules/dependency-predicates (:sentence rule-sentex))]
+  (let [antes (rules/dependency-predicates (sx/sentence-of rule-sentex))]
     {:id               handle
      :label            (str "rule#" handle)
      :antecedent-preds antes
@@ -3180,7 +3182,7 @@
                         antes (concat (exception-predicates kb handle)
                                       (rules/recheck-predicates rule-sentex)
                                       (rules/closed-extent-predicates-of
-                                       (:taxonomy kb) (:sentence rule-sentex))))}))
+                                       (:taxonomy kb) (sx/sentence-of rule-sentex))))}))
 
 (defn- stored-rule-node
   "The graph node for a stored rule handle — nil if the handle names something that
@@ -3513,7 +3515,7 @@
   moves with belief is a refusal nobody can act on."
   [kb]
   (nm/sort-by-content-key
-   (fn [[_ s]] [(:sentence s) (:context s)])
+   (fn [[_ s]] [(sx/sentence-of s) (:context s)])
    (into []
          (comp (keep (fn [h] (when-let [s (p/get-sentex (:records kb) h)] [h s])))
                (filter (fn [[_ s]] (rules/generator-sentex? s))))
@@ -3564,12 +3566,12 @@
           gens   (stored-generators kb)
           where  (or (when (and stamps (reads stamps)) "itself")
                      (some (fn [[h s]]
-                             (when (and stamps (contains? (generator-reads (:sentence s))
+                             (when (and stamps (contains? (generator-reads (sx/sentence-of s))
                                                           stamps))
                                (str "the generator at handle " h)))
                            gens)
                      (some (fn [[h s]]
-                             (when-let [p (stamped-predicate (:sentence s))]
+                             (when-let [p (stamped-predicate (sx/sentence-of s))]
                                (when (reads p)
                                  (str "the generator at handle " h ", which stamps "
                                       p))))
@@ -3768,7 +3770,7 @@
                          :exception-preds (concat (:exception-preds base)
                                                   (negative-predicates (:antecedent-preds base)
                                                                        new-exc-preds))
-                         :consequent-pred (rules/consequent-predicate (:sentence rsx)))]
+                         :consequent-pred (rules/consequent-key (:consequent rsx)))]
       (when (seq (:exception-preds pending))
         (when-let [cycle (wff/negation-cycle (:taxonomy kb)
                                              (stratification-concluders kb pending)
@@ -3808,9 +3810,9 @@
                               (when-let [rsx (p/get-sentex (:records kb) rh)]
                                 (when (and (rules/rule? rsx)
                                            (seq (rules/closed-negative-antecedents
-                                                 (rules/antecedents (:sentence rsx)))))
+                                                 (:antecedent rsx))))
                                   [rh rsx]))))
-                      (nm/sort-by-content-key (fn [[_ rsx]] [(:sentence rsx) (:context rsx)]))
+                      (nm/sort-by-content-key (fn [[_ rsx]] [(sx/sentence-of rsx) (:context rsx)]))
                       (keep (fn [[rh rsx]]
                               (let [base    (rule-graph-node kb rh rsx)
                                     pending (assoc base
@@ -3821,7 +3823,7 @@
                                                            (negative-predicates
                                                             (:antecedent-preds base) [pred]))
                                                    :consequent-pred
-                                                   (rules/consequent-predicate (:sentence rsx)))]
+                                                   (rules/consequent-key (:consequent rsx)))]
                                 (when-let [c (wff/negation-cycle
                                               (:taxonomy kb)
                                               (stratification-concluders kb pending)
@@ -3878,7 +3880,7 @@
                             (wff/negation-cycle probe concluders))
                   (nm/sort-by-content-key
                    (fn [h] (let [s (p/get-sentex (:records kb) h)]
-                             [(:sentence s) (:context s)]))
+                             [(sx/sentence-of s) (:context s)]))
                    starts))))))))
 
 (defn check-edge-stratified

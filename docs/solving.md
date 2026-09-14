@@ -1,6 +1,7 @@
 # Solving: assumptionRule and persistent, inert labeling contexts
 
-- **Covers:** how `assumptionRule` and constraint declarations become `do/label`'s
+- **Covers:** how `assumptionRule`, constraint, cardinality, and objective
+  (`asp/minimize` / soft-constraint priority) declarations become `do/label`'s
   persistent, inert labeling contexts, without touching base belief.
 - **Not here:** the ASPIF encoding and solver backends the resulting program runs on →
   [asp.md](asp.md); committing one labeling live into base belief →
@@ -176,6 +177,62 @@ is the natural extension, and a small one: the encoding layer already carries ar
 weights, so only the surface (a weight variable and the body that binds it) and the
 grounding's weight lookup are missing. It is unbuilt because no consumer needs a weighted
 bound yet; the count is what an at-most-`k` on a choice predicate is.
+
+## `minimize` / soft-constraint priorities — the objective surface
+
+A soft constraint costs 1 at one objective level. Two surfaces widen that to a *weighted,
+prioritized* objective — the weak-constraint tier a lexicographic solve needs to pick one
+answer out of a plateau of equal-cost optima:
+
+```clojure
+(asp/minimize <priority> ?weight <body>)                   ; sum ?weight over the chosen heads
+(set/softConstraint <priority> (implies <body> <marker>))  ; a soft, at a chosen level
+```
+
+**`asp/minimize`** is a weak constraint over a choice head weighted by a datum: `body`
+names a choice head and binds `?weight` off a background fact, and each chosen head pays
+its weight at level `priority`. It is the `#minimize{ W@P, head : head, weight-fact }`
+idiom:
+
+```clojure
+;; a chosen assignment costs its army→city step-distance; the objective at level 1 is the
+;; total distance of the matching, so among equal-size matchings the shortest-march one wins
+(assert kb '(asp/minimize 1 ?w (and (assign ?a ?c) (dist ?a ?c ?w))) 'CxUniverse)
+(assert kb '(dist A1 C1 3) 'CxUniverse)   ; the weight is ordinary believed data
+```
+
+**A leading integer on `set/softConstraint`** tags that soft with an objective level; with
+no tag a soft stays at level 1 (unchanged), and `set/hardConstraint` takes no priority — an
+integrity constraint is not minimized.
+
+**Grounding rides the soft-constraint path.** Both normalize into an internal
+`set/softConstraint` whose consequent marker carries the operands — `(minimizeCost p ?w)` /
+`(softPriority p marker)`, the same way a cardinality bound rides `cardAtMost`
+(`rules/normalize-solve-surface`). `solve-context` reads the level and per-head weight back
+off the ground marker (`rules/soft-cost-of`) onto the nogood's `:priority` / `:weight`, and
+`edge/translate` — which already keyed a soft's objective level off `:priority` — emits its
+per-literal weight (`[[v w]]` in place of `[[v 1]]`). So `asp/minimize` is just a soft whose
+single-head body is penalized by a data weight, and nothing downstream needed a new arm. (It
+is the weighted objective the "weighted `asp/atMostSum`" note above anticipated; the
+cardinality *bounds* are still unit-weight.)
+
+**Priority is lexicographic.** Distinct caller priorities become distinct ASPIF minimize
+levels (`2 + rank(p)`, above the fixed keep-belief=1 and content-tiebreak=0 floors —
+[asp.md](asp.md)), and a higher level dominates: the solve proves the higher objective's
+optimum first, then the next only disambiguates among its optima. So a lower-priority
+minimize is a **tiebreak** — it collapses a plateau of equal-cost optima to a unique answer
+without the higher objective ever trading for a cheaper weight. Keep the weights **coarse
+and bounded**: a distinct level with a small range proves out cheaply, whereas folding a
+tiebreak into one level with big-M weights (to preserve the strict order) widens the range
+branch-and-bound must close and is the *slower* encoding, not the faster one.
+
+**A tiebreak singles out the optimum only as far as its weights discriminate.** When many
+*distinct* solutions tie on the total weight — cost-degeneracy, not permutation symmetry — a
+residual plateau survives, and neither a finer bounded weight nor a permutation symmetry
+break removes it (a symmetry break needs interchangeable objects; distinct solutions are not
+that). Bounding the problem's size is the lever there. (Empire's target match learned this:
+the distance tiebreak turns a dense ~10×10 region from a time-limit stall into ~1 s, but a
+fully-dense ~12×12+ region stays degenerate, so its candidate graph is kept sparse.)
 
 ## The inert-fact primitive
 

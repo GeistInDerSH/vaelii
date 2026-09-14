@@ -65,7 +65,7 @@ src/vaelii/impl/
   naming.clj        naming-invariant predicates + functor/args/arity
   sentex.clj        Literal / Rule records (connectives → polarity/antecedent/consequent), split so a fact drops the rule-only slots; canonical vars + varmap, literal order, symmetric args, comparison folding/chains; canon (+ symbol interning); α-renamed path; index-terms
   rules.clj         rule-as-sentex helpers (implies form, predicates, range check, exception closure, the two polycanonicalization expands — conjunctive consequent and disjunctive antecedent, with the width cap and the per-alternative range check ([canonicalization.md](canonicalization.md)) — the generator's hole split and its nesting — [generators.md](generators.md))
-  taxonomy.clj      cached genl / genlCx closures, each read twice over — `genls` / `specs` / `genl?` / `context-up` walk the edges a context sees, and `genls-global` / `specs-global` / `genl?-global` / `context-up-global` walk every active edge, spelled out because on an unrestricted KB the two return the same object (E17 rosters the global callers); the equality partition (representative / equiv-class / deprecated?); maximal-common-descendant-contexts
+  taxonomy.clj      cached genl / genlCx closures, each read twice over — `genls` / `specs` / `genl?` / `context-up` / `sees?` walk the edges a context sees, and `genls-global` / `specs-global` / `genl?-global` / `context-up-global` / `genlCx?-global` walk every active edge, spelled out because on an unrestricted KB the two return the same object (E17 rosters the global callers); the equality partition (representative / equiv-class / deprecated?); maximal-common-descendant-contexts
   strength.clj      assumption strengths + defeat-class lattice (monotonic>default)
   kv.clj            KvBackend protocol + the one KvIndexStore over it: trie + context/functor/arg roots + rule predicate index + exception re-check index + term index; `index-layout-version`, the number that says which key shapes a build reads
   memory.clj        default backend: in-memory RecordStore + MemoryKvBackend, shared per space number
@@ -87,8 +87,12 @@ src/vaelii/impl/
   overlay/store.clj OverlayRecordStore: the record half — the id watermark that makes a low handle an override, tombstones, durable bookkeeping
   overlay/frozen.clj  the read-only mount: every read answered, every write refused, so base immutability is structural
   overlay/mount.clj   composing the two into a fork; which index implements `KvBackend` and can be forked at all, and where the bookkeeping lives
+  belief_image.clj  the belief image: a `:disk-snapshot` KB's network, taxonomy and recovery-filled atoms written beside the records, stamped with the records' fingerprint, the source identity and the belief policies, and installed on the next open in place of `recover` — or discarded whole on any mismatch ([storage.md](storage.md#the-belief-image))
+  oplog.clj         the operation log: each outermost public write recorded as the call that made it, with the clock, creator and dynamic bindings the call reads beyond its arguments; the logged record store, which fsyncs an operation's frame before the operation writes a record older than the log and, in replay mode, checks each write against the record stored at its handle; and `replay!`, which runs a generation's frames through the write entry points
+  seal.clj          seals and restores for a `:disk-snapshot` KB recording an operation log: a seal writes both images, `seal.nippy` and a new log generation; a restore installs the images against the seal's fingerprints and replays the log, or declines for the caller to rebuild from the records
+  source_identity.clj  the digest of the engine source that derives belief: the closure of `recovery` and `vaelii.core` over `ns` requires, imports and quoted symbols, read as forms with comments, docstrings and reader positions removed, plus the jar names of the libraries that closure loads.  A belief image installs only under an equal digest ([storage.md](storage.md))
   jtms_protocol.clj    the Tms protocol alone (the representation boundary both networks sit behind), in its own file so the rest of jtms.clj stays instrumentable under cloverage
-  jtms.clj          the reference network (one atom, one persistent map) behind Tms: Justification (+strength/out); non-monotonic relabel; defeat; block; supersede; retract; sweep; and the public façade over the protocol
+  jtms.clj          the reference network (one atom, one persistent map) behind Tms: Justification (+strength; a rule informant is an implicit antecedent, `rests-on`); non-monotonic relabel; defeat; block; supersede; retract; sweep; and the public façade over the protocol
   resolution.clj    unify / type-aware match / matches-visible (belief-filtered) / prove (+ prove-from: bounded, resumable, and the *dead-end* sink abduction listens on)
   inference.clj     the second backward chainer: a frontier of whole conjunctions ordered by cost, rewritten one literal at a time into a rule's residual; every node a *canonicalized* conjunction with a namespace of its own (a rule is numbered past it, so the two are disjoint by construction and nothing needs renaming apart), `:answer-terms` pushed forward per rewrite so an answer reads out in the asker's names, the rewrite each node records in its parent's namespace so a walk up `:parent-id` replays the derivation, per-literal depth (which is also the termination condition), globally claimed keys, guards lifted into the node that asks them, the search tree left behind as a value.  `core/*query-engine*` routes to it; the default is :dfs
   tactics.clj       the node engine's search policy: one additive estimate (the plan's own per-literal cost, a size penalty, the rewriting allowance, the tree level) whose signs name a tactician; the child bias a productive node's children carry; the opt-in backchain estimate and the shape probe that picks a tactician without a caller.  Every tactician returns the same answer set — ordering is a cost decision
@@ -109,6 +113,7 @@ src/vaelii/impl/
   violations.clj    the dropped-conclusion ledger, below its two writers: the chainer files a conclusion it refused, the prover registry an aggregate's numeric error, and the chainer is built *on* the registry — so the ledger reads neither and both reach down to it.  A report, not a throw: it is written from inside a fixpoint that must not abort
   quality.clj       the seven readings about the **knowledge** rather than the engine — unfired rules (off the JTMS adjacency that already exists for retraction, never a scan of the justifications), extent skew, SCC-condensed chain depth over the rule graph, taxonomy coverage, the argument-constraint census, and the two rule-hygiene readings that pair the rules against each other (which rules another already covers, which pairs would contradict each other if both fired) — plus the Markdown emitter over the map it returns.  Nothing here is a gate ([quality.md](quality.md))
   profile.clj       the workload instrument: seven tallies behind one atom that is nil when off — the structure of every retrieval decision and the access path it took, every index read by family, every trie walk's node probes, the three widths of a set-algebra sift, every record fetch by kind, and what one assert wrote and one retraction unwrote per family.  Off, each interface is a deref and a `nil?` check ([profile.md](profile.md))
+  settle_phases.clj the belief instrument beside `profile.clj`, its wall-clock twin: one atom that is nil when off, charging each settle's self-time to the four cost centres — the belief fixpoint (`relabel`/`add-justification`), nogood discovery, resolution, and generative chaining — so a bulk settle's split can be read off.  A self-time model, so a nested centre carves out of its parent and the centres sum to the whole.  Off, `with-phase` is a deref and a `nil?` check ([nmtms.md](nmtms.md))
   skolem.clj        head existentials: the deterministic `(SkolemFn <rule-handle> <i> <frontier…>)` witness a rule head `(exists ?y C)` fires to, reified through `nat` so re-firing on one binding resolves to one constant.  Its own namespace because two layers call it — the assert path declares the reifiable function when such a rule is stored, the forward chainer mints at each firing ([skolem.md](skolem.md))
   rete.clj          opt-in TREAT alpha network: RAM alpha memories indexed by arg value; the `chain/*matcher*` swap
   levels.clj        the lookup-to-query stack: 8 levels raw-index → backchaining (`level-table`); lookup / escalate / explain, which `core/explain-levels` fronts
@@ -142,7 +147,7 @@ src/vaelii/impl/
   io/export.clj     write a KB out as a portable dump: field-map frames (never a frozen record), chunked streams (`io/frames`), meta.edn written last as the completion marker; `:records+index` writes the index too, sourcing the `[key value]` projection from `io/snapshot` (`index-frames`) so a dump's index and a standalone image are one format
   io/import.clj     read one back — our own dialect natively and at the handles the dump gave (a foreign one is remapped, since re-canonicalizing can collapse two of its forms onto one record), a foreign one through the interface below; the dumped index is replayed only when handles are preserved and the layout+records core (`snapshot/index-mismatch`, shared with the image) checks out, else rebuilt with the reason said out loud
   io/fingerprint.clj  what makes a dumped index and its records provably the same KB: a commutative sum of per-record hashes over exactly what the index is a function of, accumulated in the storing pass rather than by a second walk
-  io/snapshot.clj   a **snapshot** of derived state (the index today; the JTMS labels next) and the two-op sink it is written through: `SnapshotSink` streams a named section and commits a manifest-last, `SnapshotSource` reads them back; a `file-sink`/`file-source` over `io/frames` and a `memory-medium` that is both.  `decision` is the validate-or-discard lifted from `disk/index_snapshot.clj` — one reason per mismatch class, any doubt discards the whole image and the caller rebuilds.  Holds the `[key value]` projection and the layout+records validity core that the dump above now shares ([storage.md](storage.md))
+  io/snapshot.clj   a **snapshot** of the derived index and the two-op sink it is written through: `SnapshotSink` streams a named section and commits a manifest-last, `SnapshotSource` reads them back; a `file-sink`/`file-source` over `io/frames` and a `memory-medium` that is both.  `decision` is the validate-or-discard lifted from `disk/index_snapshot.clj` — one reason per mismatch class, any doubt discards the whole image and the caller rebuilds.  Holds the `[key value]` projection and the layout+records validity core that the dump above now shares ([storage.md](storage.md))
   foreign.clj       THE EXTENSION POINT for the formats we read and do not write, and the whole of them here: no reader ships in this tree, and a plugin declares `kind -> reader var` in one edn resource on the classpath, resolved by `requiring-resolve` so no compile-time reference to one exists ([foreign.md](foreign.md))
 
 src/vaelii/host/
@@ -184,7 +189,7 @@ resources/
 
 ## Not glossed above
 
-The map covers 115 of the 156 namespaces under `src/`. The other 41 are listed here by
+The map covers 120 of the 160 namespaces under `src/`. The other 40 are listed here by
 name rather than left out, and the two lists together are every one of them — `lein
 lint`'s **E18** fails on a file in neither and on a count that disagrees with them, so
 the number above stays a measurement. Named here: the engine's write path (`integrate`,
@@ -203,8 +208,7 @@ NAT's own arguments — `context-nat` and, for the calendar dimension, `datetime
 inside that agent's own context over the lattice already there
 ([belief.md](belief.md)), `roster`, the live-handle set `sentex-ids` and its two
 siblings hand back at a scale where the structure of that set is itself the cost,
-`belief-snapshot`, the certificate a clean close writes beside the records so the
-next cold open's settle can skip its clash scan ([storage.md](storage.md)), the roster
+the roster
 saying which of the engine's own vocabulary anything reads (`vocabulary`), the two
 process-wide dials — `config` (every environment variable and system property, read once
 and refused by name at `open-kb`, [operations.md](operations.md)) and `logging` (the
@@ -219,7 +223,7 @@ impl/logging.clj  impl/modal.clj  impl/nat.clj  impl/quasiquote.clj  impl/recove
 impl/reindex.clj
 impl/rewrite.clj  impl/roster.clj  impl/settle.clj  impl/spec.clj  impl/special.clj
 impl/vocabulary.clj
-impl/asp/solve_context.clj  impl/disk/belief_snapshot.clj
+impl/asp/solve_context.clj
 host/llm/{anthropic,correct,http,inventory,ollama,oracle,page,prompt,protocol,
           provider,score,selection,session,stub,text,tools,verdict}.clj
 ```

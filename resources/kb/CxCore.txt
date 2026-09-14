@@ -896,7 +896,7 @@
 (genlArg genlResult 2 thing)
 
 (comment genlCx
-         "(genlCx ?subcontext ?supercontext) means that ?subcontext inherits from and sees everything asserted in ?supercontext. Transitive, and what places every derived conclusion: a firing lands in the most general contexts that see the rule, the facts and the taxonomy edges it used. Stored in CxUniverse by force, so the topology has one canonical home. A cycle is admitted, mutual visibility being a claim an ontology may fairly make.")
+         "(genlCx ?subcontext ?supercontext) means that ?subcontext inherits from and sees everything asserted in ?supercontext. Transitive, and what places every derived conclusion: a firing lands in the most general contexts that see the rule, the facts and the taxonomy edges it used. Stored in CxUniverse by force, so the topology has one canonical home. A cycle is refused at assert, like a genl cycle, so the context hierarchy is a partial order; a cycle a recovered or foreign store presents is still condensed.")
 (binary_predicate genlCx)
 (instance_relation_predicate genlCx)
 (arg genlCx 1 context)

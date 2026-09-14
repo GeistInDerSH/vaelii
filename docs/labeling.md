@@ -264,21 +264,18 @@ S)` prover answers that question as a read.
 ```
 
 `(cautiously S)` holds when `S` is in **every** optimal labeling of the current dilemmas,
-`(bravely S)` when `S` is in **some** — the cautious and brave halves of the same
-classification `label/classify` reports, sourced from `label/dilemma-program` and
-`edge/classify-program`. Over a datum in no dilemma both reduce to ordinary belief, since
-every optimum agrees there. The read **commits nothing**: after asking, belief,
-`contradictions` and `last-program` are exactly as they were. This is the same brave/cautious
-distinction `classify` draws, delivered on the read path — `classify` needs a `Program`
-`settle` never built for a declined dilemma, whereas the prover builds one from the reported
-dilemmas per query.
+`(bravely S)` when `S` is in **some** — the cautious and brave halves of one classification
+the prover reads through `label/classify-dilemmas`: the ASP backend when one is reachable
+(`dilemma-program` then `classify-program`), and otherwise the solve-free JTMS bracket
+below. Over a datum in no dilemma both reduce to ordinary belief, since every resolution
+agrees there. The read **commits nothing**: after asking, belief, `contradictions` and
+`last-program` are exactly as they were.
 
 Three limits, none silent:
 
 * **It is opt-in**, so the ASP stack stays off a KB's load path until asked
-  (docs/asp.md). Without a backend, `classify-program` reports every contested datum
-  `:supportable`, so `bravely` holds for each and `cautiously` for none — honest, and never
-  overclaiming forced.
+  (docs/asp.md). Without a backend the prover reads the solve-free bracket below rather
+  than an enumeration, so `bravely` and `cautiously` still answer.
 * **`bravely` / `cautiously` are not assertible** (they join `unknown` and the aggregates as
   reserved query operators, docs/naming.md): a stored one would be a computed value with no
   way to keep it current.
@@ -287,6 +284,61 @@ Three limits, none silent:
   answer carries no support (the prover is not a `SupportingProver`), so the forward join
   drops it and it derives nothing. Threading its support — the dilemma's contested handles —
   so a rule could rest on it is deferred until a use asks for it.
+
+### The solve-free bracket
+
+`label/classify-dilemmas` reads the ASP backend when one is reachable and
+`label/classify-local` otherwise. `classify-local` classifies the current dilemmas from
+the JTMS dependency graph, with no answer-set enumeration and no backend, so a plain build
+answers `bravely` and `cautiously` rather than reporting every contested datum
+`:supportable`.
+
+It rests on one JTMS read. `jtms/grounded-in-region` recomputes belief with a set of datums
+**forced OUT** — the forward consequence closure of that set, and within it the datums that
+stay believed, belief outside the closure read per datum rather than materialized
+(`grounded-forcing-out` splices the same read back into full belief, equal to `(jtms/defeat
+…)` of the set). A **resolution** is a minimum-cardinality set of dilemma members whose
+forcing OUT satisfies every nogood — leaves no nogood with all its members still believed —
+which is a dilemma set's optimal labelings. `classify-local` reads belief under each
+resolution and splits a believed datum by which resolutions keep it: `:true` when every
+resolution keeps it (skeptical), `:supportable` when some but not every do (credulous),
+`:false` when none do.
+
+`(hasEthicalStance Nixon)` drawn from **both** the pacifist and non-pacifist side is `:true`:
+every resolution keeps one side, so one support survives. `(opposesWar Nixon)` resting on
+the pacifist side alone is `:supportable`, so `(cautiously (opposesWar Nixon))` is false —
+where the member-only `classify-program` leaves that conclusion to base belief (which
+believes both sides and so reports it cautious). `(weird Nixon)` drawn from `(and (pacifist
+Nixon) (not (pacifist Nixon)))` is `:false`: it is believed only because base belief holds
+both sides at once, and every resolution drops one, so it holds in none.
+
+**Coupled dilemmas are enumerated together, independent ones apart.** Two nogoods that share
+a member, or that move a member of each other through the derivation graph, form one cluster
+(`cluster-indices`), and a cluster's resolutions come from `min-resolutions`, which
+enumerates the cluster's member subsets by increasing size and keeps the first size at which
+a subset satisfies every nogood. It searches whole subsets rather than branching on one
+nogood's members, which is what keeps it belief-faithful: a member a defeat drops by cascade
+counts as forced OUT, so a subset that forces no member of a nogood can still satisfy it —
+defeating `pb` satisfies `pa`'s nogood when `¬pa` derives from `pb`. A datum is classified by
+the joint resolutions of the clusters that move it — the cartesian product of those clusters'
+optima, since a cluster that does not move the datum leaves it at base whatever it resolves to.
+Two coupled nogoods `{a,b}` and `{b,c}` resolve by defeating `b` alone, so `a` and `c` are
+`:true` and `b` is `:false` — the outcome a per-dilemma reading misses, since dropping `a`
+looks like a resolution of a's own dilemma until the shared `b` shows it is not minimal. And a
+`(f N)` from `(and (e1 N) (e2 N))`, where `e1` and `e2` are each `:true` in a separate diamond,
+is `:true`: it holds in every combination of the two diamonds' resolutions.
+
+`classify-local` is **sound** — nothing is `:true` that a resolution gives up, nothing
+`:false` that one keeps — and **complete for a datum whose clusters it enumerates**: the one
+cluster its support touches, or the several whose product of resolutions stays within
+`VAELII_CLASSIFY_MAX_JOINT_OPTIMA`. The residual a backend still refines is a datum whose
+product of clusters exceeds that cap, or a cluster past `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS`
+or the `VAELII_CLASSIFY_RESOLUTION_BUDGET` search ceiling; each degrades to `:supportable`,
+which claims neither forced nor excluded. An operator tunes each cap through its
+`VAELII_CLASSIFY_*` switch (docs/operations.md). Its cost is
+the clusters' consequence closures: **linear** in the number of independent dilemmas
+(`grounded_forcing_out_test`), exponential only inside one interacting cluster or across the
+clusters one datum joins, and capped at both.
 
 ## Naming
 
@@ -300,7 +352,10 @@ only adds.
 dilemma-to-`Program` bridge (`label/dilemma-program`), the solve-sourced labeling, and
 `label/label-dilemmas`. `label/classify-program`, `label/label-context`,
 `edge/edge-solver` and the clingo/clasp backends are `asp_label_test` /
-`asp_edge_test`'s subject.
+`asp_edge_test`'s subject. The `(bravely S)` / `(cautiously S)` prover and the
+prover-driven `classify-local` classifications are `asp_prover_test`'s; the backend-free
+property tests for the solve-free bracket (`jtms/grounded-forcing-out`, `classify-local`
+order-independence and scaling) are `grounded_forcing_out_test`'s.
 
 Limits, none of them silent:
 

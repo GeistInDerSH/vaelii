@@ -87,11 +87,12 @@
     monitor rather than a kind's, because a whole-file blob rewrite held inside a kind
     lock would put a record append behind it every tick that minted a handle.
 
-  `premises` needs neither on the write path: every mutation is one `swap!` on one atom,
-  and the pair that matters — a handle in `premise-ids` whose record is gone — is a
-  `kill!` the writer makes, on the thread that would read it back.  The one mutation from
-  another thread is the compactor's `drop-lost!`, which takes the kind lock beside the
-  `live-ids` drop it belongs with."
+  `premises` is a `LiveRoster` too, and sits under the **sentexes** kind lock for reads
+  and writes alike, because a premise is a sentex handle.  It is not folded into
+  `store!`'s acquisition: a premise joins the roster after its record lands, in a second
+  acquisition, so a failed write leaves no handle in `premise-ids` whose `get-sentex` is
+  nil.  The compactor's `drop-lost!` removes from it only when compacting the sentexes
+  kind, under the lock it already holds."
   (:require [taoensso.trove :as trove]
             [vaelii.impl.caches :as caches]
             [vaelii.impl.config :as config]
@@ -146,6 +147,27 @@
 ;; failure of a compaction that could not install its result past the commit point,
 ;; else nil; while set, every read and write refuses (`usable!`).
 (defrecord Kind [log idx lock live-ids log-path idx-path compacting failed cache enc dec])
+
+;; The kind lock is a `ReentrantReadWriteLock`, not a bare monitor.  It serializes a read
+;; against a concurrent append + slot rewrite (`store!`/`kill!`/compaction), which is what
+;; a positional read needs protection from — but two positional reads are safe against
+;; each other, so `fetch` takes the **read** lock and a bulk sweep (`export!`, `reindex`,
+;; `recover`) fans its per-record fetch+decode across cores instead of funnelling every
+;; one through a single monitor.  Every mutating site takes the **write** lock, which
+;; excludes readers and writers alike — identical exclusion to the old monitor.  Read
+;; while holding write is fine (a writer may fetch); write while holding read is an
+;; upgrade and deadlocks, so `fetch`'s body never writes.
+(defmacro ^:private with-write [lockexpr & body]
+  `(let [^java.util.concurrent.locks.ReentrantReadWriteLock l# ~lockexpr
+         ^java.util.concurrent.locks.Lock w# (.writeLock l#)]
+     (.lock w#)
+     (try ~@body (finally (.unlock w#)))))
+
+(defmacro ^:private with-read [lockexpr & body]
+  `(let [^java.util.concurrent.locks.ReentrantReadWriteLock l# ~lockexpr
+         ^java.util.concurrent.locks.Lock r# (.readLock l#)]
+     (.lock r#)
+     (try ~@body (finally (.unlock r#)))))
 
 (defn- track-touched
   "Record `id` in an in-flight compaction's touched set (a no-op when none is running).
@@ -223,7 +245,7 @@
                              (roster/live-add! live id)
                              (when slot-tap (slot-tap id flags))))
           (roster/live-optimize! live)
-          (->Kind log idx (Object.) live log-path idx-path (atom nil) (atom nil)
+          (->Kind log idx (java.util.concurrent.locks.ReentrantReadWriteLock.) live log-path idx-path (atom nil) (atom nil)
                   (when (pos? cache-cap) (lru cache-cap)) enc dec))
         (catch Throwable t
           (f/close! log)
@@ -231,6 +253,12 @@
           (throw t))))))
 
 (defn- counters-path [dir] (str dir "/counters.nippy"))
+
+(defn- counters-blob
+  "The `counters.nippy` blob for handle counter `n` and clear epoch `epoch`, which is
+  omitted while nil."
+  [n epoch]
+  (cond-> {:seq n} epoch (assoc :epoch epoch)))
 
 (defn- store!
   "Append `rec` to kind `k`, point slot `id` at the new frame, and mark `id` live.
@@ -248,7 +276,7 @@
   put inside a monitor that was already held for two file writes."
   ([k id rec] (store! k id rec false))
   ([k id rec premise?]
-   (locking (:lock k)
+   (with-write (:lock k)
      (usable! k)
      (let [[off plen] (f/append-record-sized! (:log k) ((:enc k) rec))]
        ;; the premise's strength rides the slot too (bits 2..3), so `premise-strength`
@@ -280,7 +308,7 @@
   tolerates."
   [k batch]
   (when (seq batch)
-    (locking (:lock k)
+    (with-write (:lock k)
       (usable! k)
       (let [offs (f/append-records-sized! (:log k) (map (fn [[_ rec _]] ((:enc k) rec)) batch))]
         (f/write-slots! (:idx k)
@@ -312,11 +340,13 @@
     (usable! k)
     (let [^java.util.Map c (:cache k)]
       (or (when c (.get c id))
-          ;; the lock is kept even though both reads are now positional (they neither use
-          ;; nor move the shared pointer): it is what serializes a read against a
-          ;; concurrent append + slot write, and an uncontended monitor is noise beside
-          ;; the two reads.
-          (let [rec (locking (:lock k)
+          ;; the **read** lock is kept even though both reads are positional (they neither
+          ;; use nor move the shared pointer): it is what serializes a read against a
+          ;; concurrent append + slot rewrite.  Two positional reads are safe against each
+          ;; other, so this is the read lock rather than the write one — concurrent fetches
+          ;; (a bulk `export!`/`reindex`/`recover` sweep across cores) run in parallel, and
+          ;; only a writer (`store!`/`kill!`/compaction, all on the write lock) excludes them.
+          (let [rec (with-read (:lock k)
                       (when-let [slot (f/read-slot (:idx k) id)]
                         (when-not (:tombstone? slot)
                           (some-> (f/read-record-sized (:log k) (:offset slot) (:length slot))
@@ -335,7 +365,7 @@
   append.  It is the same acquisition either way — the test only ever decided whether to
   take one."
   [k id]
-  (locking (:lock k)
+  (with-write (:lock k)
     (when (roster/live-has? (:live-ids k) id)
       (usable! k)
       (f/tombstone-slot! (:idx k) id)
@@ -391,7 +421,8 @@
                        (when sentexes?
                          (let [ps (into [] (comp (filter (fn [[_ _ p?]] p?)) (map first))
                                         recs)]
-                           (when (seq ps) (swap! premises into ps))))
+                           (when (seq ps)
+                             (with-write (:lock k) (roster/live-add-all! premises ps)))))
                        (.clear pending))))]
     (reify
       p/RecordSink
@@ -417,7 +448,11 @@
 ;; across a whole-file blob rewrite would put a record append behind it: `fsync` runs on
 ;; the durability daemon's thread and `clear-records!` on the writer's, so the pair that
 ;; needs serializing is those two and nothing else on the store's hot path.
-(defrecord DiskRecordStore [dir kinds counter synced-seq premises dict counters-lock]
+;;
+;; `epoch` holds the store's clear epoch: nil for a store no `clear-records!` has emptied,
+;; else the random long the latest wipe minted.  The counters blob carries it, and both
+;; slot fingerprints fold it in (`slot-fingerprint`, `belief-fingerprint`).
+(defrecord DiskRecordStore [dir kinds counter synced-seq premises dict counters-lock epoch]
   p/RecordStore
   (next-id [_] (long (dec (swap! counter inc))))
 
@@ -425,7 +460,8 @@
     (let [id  (clear-counter! counter (or (:id sentex) (p/next-id this)))
           rec (assoc sentex :id id)]
       (store! (:sentexes kinds) id rec (some? (:strength rec)))
-      (when (:strength rec) (swap! premises conj id))
+      (when (:strength rec)
+        (with-write (:lock (:sentexes kinds)) (roster/live-add! premises id)))
       id))
   ;; Tallied by kind (`vaelii.impl.profile`), the same call sites the RAM store carries, and
   ;; this is the store the number is *about*: a miss here is a positional slot read, a
@@ -435,7 +471,7 @@
   (get-sentex [_ id] (prof/record-fetch :sentex) (fetch (:sentexes kinds) id))
   (delete-sentex! [_ id]
     (kill! (:sentexes kinds) id)
-    (swap! premises disj id)
+    (with-write (:lock (:sentexes kinds)) (roster/live-remove! premises id))
     (kill! (:provenance kinds) id)          ; provenance dies with its record
     nil)
 
@@ -453,14 +489,14 @@
   (get-provenance    [_ id]      (prof/record-fetch :provenance) (fetch (:provenance kinds) id))
   (delete-provenance! [_ id]     (kill! (:provenance kinds) id) nil)
 
-  ;; Snapshot under the lock, materialize outside it.  The snapshot is a bitmap copy and
-  ;; costs the roster's size; the `set` is the caller-visible shape, which every store the
-  ;; engine ships answers and which nothing here changes.  Doing the second inside the
-  ;; lock would put a whole-extent allocation in front of the writer.
-  (sentex-ids    [_] (set (locking (:lock (:sentexes kinds))
-                            (roster/live-snapshot (:live-ids (:sentexes kinds))))))
-  (justification-ids [_] (set (locking (:lock (:justifications kinds))
-                                (roster/live-snapshot (:live-ids (:justifications kinds))))))
+  ;; Each enumeration answers the snapshot itself, an immutable `HandleRoster` taken under
+  ;; the lock.  The snapshot is a bitmap copy and costs the roster's size, not the extent.
+  ;; The protocol promises a `java.util.Set` answering membership, iteration, cardinality
+  ;; and ordering, which the roster answers; a caller wanting `conj` converts with `set`.
+  (sentex-ids    [_] (with-write (:lock (:sentexes kinds))
+                       (roster/live-snapshot (:live-ids (:sentexes kinds)))))
+  (justification-ids [_] (with-write (:lock (:justifications kinds))
+                           (roster/live-snapshot (:live-ids (:justifications kinds)))))
 
   (mark-premise [_ id strength]
     ;; the strength lives on the sentex record: re-store it with :strength set (a new
@@ -478,7 +514,7 @@
       (when-let [sx (fetch k id)]
         (when-not (= want (:strength sx))
           (store! k id (assoc sx :strength want) true))
-        (swap! premises conj id)))
+        (with-write (:lock k) (roster/live-add! premises id))))
     nil)
   (unmark-premise! [_ id]
     ;; the same guard as mark-premise, pointing the other way: a derived record's
@@ -487,10 +523,12 @@
     (let [k (:sentexes kinds)]
       (when-let [sx (fetch k id)]
         (when (some? (:strength sx))
-          (store! k id (assoc sx :strength nil) false))))
-    (swap! premises disj id)
+          (store! k id (assoc sx :strength nil) false)))
+      (with-write (:lock k) (roster/live-remove! premises id)))
     nil)
-  (premise-ids      [_] (set @premises))
+  ;; the snapshot under the lock, answered as it is, as `sentex-ids` does
+  (premise-ids      [_] (with-write (:lock (:sentexes kinds))
+                          (roster/live-snapshot premises)))
   (premise-strength [_ id]
     ;; read the rank off the slot (bits 2..3) — one positional 24-byte read, no frame and
     ;; no thaw.  A rank-0 slot carries no strength (a non-premise, or a slot older than the
@@ -507,7 +545,7 @@
     ;; depend on the backend for a key it does not hold.
     (let [k (:sentexes kinds)]
       (if (and (integer? id) (not (neg? (long id))))
-        (if-let [slot (locking (:lock k) (usable! k) (f/read-slot (:idx k) id))]
+        (if-let [slot (with-write (:lock k) (usable! k) (f/read-slot (:idx k) id))]
           (let [rank (f/slot-strength (:flags slot))]
             (if (pos? rank)
               (strength/class-of-rank rank)
@@ -516,8 +554,27 @@
         :default)))
 
   (clear-records! [_]
+    ;; The counter, the blob, the stamp and the epoch are one step, under the monitor
+    ;; `fsync` takes for the first three.  A daemon tick that read the counter before the
+    ;; wipe and wrote the blob after it would leave a wiped store stamped with the pre-wipe
+    ;; high-water mark, and `synced-seq` agreeing — so the next open starts issuing handles
+    ;; from a number no record in the store has ever reached.
+    ;;
+    ;; The wipe truncates every log, so a record written after it lands at an offset a
+    ;; removed record held, and one of the same byte length reproduces that record's slot
+    ;; exactly.  A new epoch separates the two record sets in a slot fingerprint.  The blob
+    ;; carrying it is written before the truncation, so a crash between the two leaves the
+    ;; old records under the new epoch, which declines an image, and never the new records
+    ;; under the old one.  A counter of 1 beside the old records reissues no handle, because
+    ;; `recover-next-id` starts past the highest slot.
+    (let [e (.nextLong (java.util.concurrent.ThreadLocalRandom/current))]
+      (locking counters-lock
+        (reset! epoch e)
+        (reset! counter 1)
+        (f/write-nippy-atomic! (counters-path dir) (counters-blob 1 e))
+        (reset! synced-seq 1)))
     (doseq [k (vals kinds)]
-      (locking (:lock k)
+      (with-write (:lock k)
         (f/truncate! (:log k))
         (f/truncate! (:idx k))
         (roster/live-clear! (:live-ids k))
@@ -533,19 +590,10 @@
         (let [{:keys [temps marker]} (f/compact-temp-paths (:log-path k) (:idx-path k))]
           (f/delete-compact-temps! marker temps))
         (reset! (:failed k) nil)))
-    (reset! premises #{})
+    (with-write (:lock (:sentexes kinds)) (roster/live-clear! premises))
     ;; the dictionary goes with them: no frame survives to hold an id, and keeping the
     ;; ids would leave a wiped store carrying its predecessor's whole vocabulary
     (when dict (dtok/clear! dict))
-    ;; The counter, the blob and the stamp are one step, under the monitor `fsync` takes
-    ;; for the same three.  A daemon tick that read the counter before the wipe and wrote
-    ;; the blob after it would leave a wiped store stamped with the pre-wipe high-water
-    ;; mark, and `synced-seq` agreeing — so the next open starts issuing handles from a
-    ;; number no record in the store has ever reached.
-    (locking counters-lock
-      (reset! counter 1)
-      (f/write-nippy-atomic! (counters-path dir) {:seq 1})
-      (reset! synced-seq 1))
     nil)
 
   ;; Both live-id rosters and the premise set are resident already (the namespace
@@ -554,15 +602,16 @@
   ;; lowest set bit — neither walks the roster, so all four are O(1) under a lock the
   ;; writer holds only for two file writes.
   p/Tallying
-  (sentex-tally        [_] (locking (:lock (:sentexes kinds))
+  (sentex-tally        [_] (with-write (:lock (:sentexes kinds))
                              (roster/live-tally (:live-ids (:sentexes kinds)))))
-  (justification-tally [_] (locking (:lock (:justifications kinds))
+  (justification-tally [_] (with-write (:lock (:justifications kinds))
                              (roster/live-tally (:live-ids (:justifications kinds)))))
-  (a-sentex-id         [_] (locking (:lock (:sentexes kinds))
+  (a-sentex-id         [_] (with-write (:lock (:sentexes kinds))
                              (roster/live-least (:live-ids (:sentexes kinds)))))
-  (a-justification-id  [_] (locking (:lock (:justifications kinds))
+  (a-justification-id  [_] (with-write (:lock (:justifications kinds))
                              (roster/live-least (:live-ids (:justifications kinds)))))
-  (a-premise-id        [_] (first @premises))
+  (a-premise-id        [_] (with-write (:lock (:sentexes kinds))
+                             (roster/live-least premises)))
 
   ;; A record at a time here is two syscalls on an unbuffered `RandomAccessFile` — the log
   ;; append and the 24-byte slot write — plus a lock, and a bulk load pays both per record
@@ -597,12 +646,23 @@
                                            (when-not (= want (:strength sx))
                                              [id (assoc sx :strength want) true])))
                                 have))
-          (swap! premises #(into % (map first) have)))))
+          (with-write (:lock k) (roster/live-add-all! premises (map first have))))))
     nil)
   (put-provenance-batch [_ entries]
     (doseq [chunk (partition-all default-batch entries)]
       (store-batch! (:provenance kinds) (mapv (fn [[id prov]] [id prov false]) chunk)))
     nil))
+
+(defn- kind-fingerprint
+  "The slot fingerprint of one kind `k`, as `{:count :max-handle :digest}`, plus `:epoch`
+  when a wipe has minted one.  One sequential pass over its idx under the kind's lock,
+  decoding nothing."
+  [k epoch]
+  (let [acc (fp/slot-accumulator)]
+    (with-write (:lock k)
+      (usable! k)
+      (f/scan-idx! (:idx k) (fn [id offset length _flags] (acc id offset length))))
+    (cond-> (acc) epoch (assoc :epoch epoch))))
 
 (defn slot-fingerprint
   "What the sentexes idx currently says, as `{:count :max-handle :digest}` — the stamp a
@@ -614,18 +674,25 @@
   record through `fingerprint/accumulator`) would put
   all of them back on the open path.  What it detects is every way the record set can
   change under a snapshot — a record added, deleted, or re-stored (a re-store appends a
-  new frame, so the handle's offset moves).
+  new frame, so the handle's offset moves) — and a wipe, whose records reuse the
+  truncated offsets and so are told apart by the `:epoch` `clear-records!` mints.
 
   It consults `usable!`: this is a *claim about the record set*, and a half-copied idx
   would answer with a fingerprint describing no version of the records that ever existed
   — which a derived image would then be stamped with, or validated against."
-  [{:keys [kinds]}]
-  (let [k   (:sentexes kinds)
-        acc (fp/slot-accumulator)]
-    (locking (:lock k)
-      (usable! k)
-      (f/scan-idx! (:idx k) (fn [id offset length _flags] (acc id offset length))))
-    (acc)))
+  [{:keys [kinds epoch]}]
+  (kind-fingerprint (:sentexes kinds) @epoch))
+
+(defn belief-fingerprint
+  "The stamp a belief image is validated against: `{:sentexes fp :justifications fp}`,
+  each a `kind-fingerprint`.  Belief reads both kinds — the sentexes, whose slots also
+  move when a premise mark re-stores one, and the justifications — so a change to
+  either moves the stamp, where `slot-fingerprint` alone misses a justification stored
+  over sentexes that did not change."
+  [{:keys [kinds epoch]}]
+  (let [e @epoch]
+    {:sentexes       (kind-fingerprint (:sentexes kinds) e)
+     :justifications (kind-fingerprint (:justifications kinds) e)}))
 
 (defn fsync
   "fsync every kind's log + idx, and rewrite the counters blob when the handle counter has
@@ -651,19 +718,19 @@
   mark and `synced-seq` would agree with it.  So the three that move together move under
   `counters-lock`, which the wipe takes for the same three; the counter is read inside
   it rather than before it, which is what makes the read part of the same step."
-  [{:keys [dir kinds counter synced-seq dict counters-lock]}]
-  (locking (:lock (:sentexes kinds))
+  [{:keys [dir kinds counter synced-seq dict counters-lock epoch]}]
+  (with-write (:lock (:sentexes kinds))
     (when dict (dtok/fsync dict))
     (f/force! (:log (:sentexes kinds)) false)
     (f/force! (:idx (:sentexes kinds)) true))
   (doseq [[kind k] kinds :when (not= kind :sentexes)]
-    (locking (:lock k)
+    (with-write (:lock k)
       (f/force! (:log k) false)
       (f/force! (:idx k) true)))
   (locking counters-lock
     (let [want @counter]
       (when-not (= want @synced-seq)
-        (f/write-nippy-atomic! (counters-path dir) {:seq want})
+        (f/write-nippy-atomic! (counters-path dir) (counters-blob want @epoch))
         (reset! synced-seq want))))
   nil)
 
@@ -699,21 +766,22 @@
     (fsync store)
     (f/write-clean-marker! dir (into {} (map (fn [[kind k]]
                                                [(clojure.core/name kind)
-                                                (locking (:lock k) (f/log-length (:log k)))]))
+                                                (with-write (:lock k) (f/log-length (:log k)))]))
                                      kinds))
     (finally
       (doseq [[kind k] kinds]
-        (locking (:lock k)
+        (with-write (:lock k)
           (close-quietly! (str (clojure.core/name kind) ".log") #(f/close! (:log k)))
           (close-quietly! (str (clojure.core/name kind) ".idx") #(f/close! (:idx k)))))
       (when dict (close-quietly! "the token dictionary" #(dtok/close! dict)))))
   (f/remove-dirty-marker! dir))
 
 (defn- recover-next-id
-  "The counter to start `next-id` from: the max of the persisted blob and one past the
-  highest slot id across the sentex + justification kinds (provenance shares their ids)."
-  [dir kinds]
-  (let [blob (long (:seq (f/read-nippy-file (counters-path dir) {:seq 1})))
+  "The counter to start `next-id` from: the max of the persisted `counters` blob and one
+  past the highest slot id across the sentex + justification kinds (provenance shares
+  their ids)."
+  [counters kinds]
+  (let [blob (long (:seq counters))
         hi   (long (max (f/max-slot-id (:idx (:sentexes kinds)))
                         (f/max-slot-id (:idx (:justifications kinds)))))]
     (max blob (inc hi) 1)))
@@ -742,7 +810,8 @@
   that disagrees with its record is rewritten here, once, on the rare unclean open —
   self-healing, so the next open is fast again."
   [k root dict marked unsaid dirty?]
-  (let [prem    (java.util.HashSet. ^java.util.Collection marked)
+  (let [prem    marked
+        n-said  (with-write (:lock k) (roster/live-tally marked))
         ;; A snapshot rather than the roster itself: the walk below tombstones a damaged
         ;; record through `kill!`, which drops that handle from the live set — an
         ;; iteration over the live bitmap would be walking a structure it is editing.
@@ -750,7 +819,7 @@
         ;; thread before the store is published: an invariant with an exception in it is
         ;; one nobody can check.
         walk    (if (or dict dirty?)
-                  (locking (:lock k) (roster/live-snapshot (:live-ids k)))
+                  (with-write (:lock k) (roster/live-snapshot (:live-ids k)))
                   unsaid)
         damaged (volatile! 0)
         fixed   (volatile! 0)]
@@ -768,7 +837,8 @@
                       (vswap! damaged inc)
                       (kill! k id)
                       nil))]
-        (if (:strength sx) (.add prem id) (.remove prem id))
+        (with-write (:lock k)
+          (if (:strength sx) (roster/live-add! prem id) (roster/live-remove! prem id)))
         ;; a torn flags page across a crash may have left this slot's bit or rank stale;
         ;; the record is the truth, so rewrite the slot to it wherever they disagree
         (when (and dirty? sx)
@@ -786,9 +856,10 @@
                              " against their records after an unclean shutdown"
                              " (torn flags page)")}))
     (trove/log! {:level :debug :id ::premise-set
-                 :msg (str "disk records: premise set from " (count marked)
+                 :msg (str "disk records: premise set from " n-said
                            " annotated slot(s), " (count walk) " record(s) decoded")})
-    (set prem)))
+    (with-write (:lock k) (roster/live-optimize! prem))
+    prem))
 
 (defn open-record-store
   "Open a `DiskRecordStore` rooted at `dir/records`.  Recovers each kind, rebuilds the
@@ -837,11 +908,13 @@
                ;; a premise is a sentex whose :strength is non-nil, and its slot says so —
                ;; so the set rides the idx walk `open-kind` is already making, and only a
                ;; slot that does not say costs a record read (`rebuild-premises!`)
-               marked (java.util.HashSet.)
+               marked (roster/live-roster)
                unsaid (java.util.ArrayList.)
+               ;; runs inside `open-kind`'s idx walk, on the opening thread before the
+               ;; store is published, so the roster takes no lock here
                tap    (fn [id flags]
                         (if-some [premise? (f/slot-premise flags)]
-                          (when premise? (.add marked id))
+                          (when premise? (roster/live-add! marked id))
                           (.add unsaid id)))
                kinds  (into {} (map (fn [n]
                                       (let [k (open-kind root n cache-capacity codecs
@@ -851,10 +924,12 @@
                                         (.add closers #(f/close! (:idx k)))
                                         [(keyword n) k])))
                             kind-names)
-               counter (atom (recover-next-id root kinds))
-               prem    (atom (rebuild-premises! (:sentexes kinds) root dict marked unsaid dirty?))]
+               counters (f/read-nippy-file (counters-path root) {:seq 1})
+               counter  (atom (recover-next-id counters kinds))
+               prem     (rebuild-premises! (:sentexes kinds) root dict marked unsaid dirty?)]
            (f/create-dirty-marker! root)
-           (->DiskRecordStore root kinds counter (atom nil) prem dict (Object.)))
+           (->DiskRecordStore root kinds counter (atom nil) prem dict (Object.)
+                              (atom (:epoch counters))))
          (catch Throwable t
            (doseq [c closers] (close-quietly! "a half-opened record store" c))
            (throw t)))))))
@@ -865,7 +940,7 @@
   "Dead-byte fraction of kind `k`: 1 - live-frame-bytes / log-length.  Live-frame
   bytes are summed from the live slots (offset + 4 + length)."
   ^double [k]
-  (locking (:lock k)
+  (with-write (:lock k)
     (usable! k)
     (let [total (f/log-length (:log k))
           live  (volatile! 0)]
@@ -946,7 +1021,7 @@
   rewrite for a closer to block on."
   [{:keys [kinds]}]
   (doseq [k (vals kinds)]
-    (locking (:lock k)
+    (with-write (:lock k)
       (swap! (:compacting k) #(assoc (or % {:touched #{}}) :aborted true))))
   nil)
 
@@ -985,7 +1060,7 @@
         [[_ log-tmp] [_ idx-tmp]] temps
         ;; snapshot (brief lock) — the live slots as of now; everything so far sits at
         ;; offset < cutoff (immutable), so the rewrite can read it lock-free.
-        snapshot (locking (:lock k)
+        snapshot (with-write (:lock k)
                    (usable! k)
                    (let [live (java.util.ArrayList.)]
                      (f/scan-idx! (:idx k)
@@ -1017,9 +1092,9 @@
                      ;; resident half of an idx write that was itself locked.  Reentrant,
                      ;; so the call from inside the reconcile costs a recursion count.
                      (when (seq @lost)
-                       (locking (:lock k)
+                       (with-write (:lock k)
                          (roster/live-remove-all! (:live-ids k) @lost)
-                         (swap! premises #(reduce disj % @lost))
+                         (when premises (roster/live-remove-all! premises @lost))
                          (when-let [^java.util.Map c (:cache k)]
                            (doseq [id @lost] (.remove c id))))))
         drop-slot! (fn [tidx id]
@@ -1059,7 +1134,7 @@
             (recur (next todo) (inc n)))))
       (f/close! rlog)
       ;; reconcile + swap (brief lock)
-      (locking (:lock k)
+      (with-write (:lock k)
         (let [{:keys [touched aborted]} @(:compacting k)]
           (if aborted
             (do (f/close! tlog) (f/close! tidx)
@@ -1125,7 +1200,7 @@
           ;; into `failed`: every read and write refuses with `:compaction-failed`
           ;; rather than answering off a torn log, and the next open finishes the
           ;; install.
-          (let [again (try (locking (:lock k)
+          (let [again (try (with-write (:lock k)
                              (f/replay-temp-onto-raf! (:log k) log-tmp)
                              (f/replay-temp-onto-raf! (:idx k) idx-tmp)
                              (f/delete-compact-temps! marker temps))
@@ -1135,7 +1210,7 @@
               ;; the flag under the lock every reader of it takes (`usable!`), so a read
               ;; already inside the monitor cannot be answered off half-copied files by
               ;; a flag this thread was in the middle of setting
-              (do (locking (:lock k) (reset! (:failed k) again))
+              (do (with-write (:lock k) (reset! (:failed k) again))
                   (trove/log! {:level :error :id ::compaction-failed
                                :msg (str "disk record store: compaction of " (:log-path k)
                                          " failed after its commit point and the retry"
@@ -1156,7 +1231,7 @@
         ;; outside it, a writer's `track-touched` can read a live compaction and fold an
         ;; id into a `:touched` set this thread is discarding, and the id is one the
         ;; reconcile never copied into the temp.
-        (locking (:lock k) (reset! (:compacting k) nil))
+        (with-write (:lock k) (reset! (:compacting k) nil))
         ;; and give the three handles back one at a time, quietly: a close that threw
         ;; here would take the handles after it with it — leaving RAFs open over a
         ;; directory `close-dir!` unlocks regardless — and would mask whatever the body
@@ -1172,7 +1247,10 @@
   the log cannot give back, which is dropped rather than re-stored empty
   (`compact-kind!`)."
   [{:keys [kinds premises]}]
-  (doseq [k (vals kinds)] (compact-kind! k premises)))
+  ;; A lost frame drops its handle from the premise roster only in the sentexes kind.  A
+  ;; provenance handle is its sentex's handle, so a lost provenance frame must leave that
+  ;; sentex's premise mark standing.
+  (doseq [[n k] kinds] (compact-kind! k (when (= n :sentexes) premises))))
 
 ;; ---- what a paged store holds, declared ---------------------------------
 ;;

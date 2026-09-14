@@ -351,10 +351,10 @@ saying so — so the card appears and the load reports `this build does not read
 cyc-corpus`. That message means the reader is absent, not that the KB is bad.
 
 The route to a reader, and what each load costs, is [kbs.md](kbs.md); the extension point it plugs
-into is [foreign.md](foreign.md). Two things about the development tree specifically:
-`lein install` in the sibling installs the sibling's *own* current version, so it satisfies
-the `:with-foreign` pin only when the two versions agree — `lein lint`'s versions check
-holds that. And `scripts/link-checkouts.sh` puts the sibling on **every** command's
+into is [foreign.md](foreign.md). Two things about the development tree specifically: a
+snapshot you are developing is not on Clojars, so put it on the classpath from source with
+`scripts/link-checkouts.sh` or `lein install` it and name that version in an ad-hoc
+dependency add. And `scripts/link-checkouts.sh` puts the sibling on **every** command's
 classpath, so a foreign read that works may be the link rather than the code.
 
 ## `open-kb` refuses an unknown backend
@@ -557,7 +557,7 @@ so one vocabulary reads both.
 | `:manifest-too-large` | a manifest file longer than the bound the reader allows; a manifest is a handful of keys | [storage.md](storage.md) |
 | `:missing-adapter` | a **legal** `:sqlite` or `:pg` records axis whose Apache-2.0 sibling is not on the classpath — `:coordinate` names the dependency to add, and the backend is not the thing to change | [storage.md](storage.md) |
 | `:missing-resource` | a KB file, ontology layer or text KB is not where it was looked for | [kbs.md](kbs.md) |
-| `:naf-justification` | a dump names a justification with a non-empty `:out` slot, which is reserved and empty here | [naf.md](naf.md) |
+| `:naf-justification` | a dump names a justification with a non-empty `:out`, and a justification here has no out-list | [naf.md](naf.md) |
 | `:naf-not-closed` | an `unknown` antecedent or an aggregate census reads a variable nothing else in the rule binds | [naf.md](naf.md) |
 | `:naming` | a symbol's spelling does not match its role — see [`assert` refused it](#assert-refused-it) | [naming.md](naming.md) |
 | `:nippy-version-moved` | the nippy on the classpath is not the release the class-name check was written against; re-read its three attachment points, then move `thaw/pinned-nippy-version` | [defenses.md](defenses.md) |
@@ -618,6 +618,7 @@ so one vocabulary reads both.
 | `:unknown-source` | the catalog has no KB source by that id, or the source names a kind nothing loads | [catalog.md](catalog.md) |
 | `:unknown-subscription` | the feed token names no subscription — it was dropped, timed out, or belongs to another daemon | [feed.md](feed.md) |
 | `:unknown-tactician` | a strategy names a tactician the ordering table does not hold | [inference.md](inference.md) |
+| `:unminted-nat` | `assert-inert` was handed a reifiable NAT this KB never minted; it never mints, so assert the NAT-bearing fact first | [nat.md](nat.md) |
 | `:unparseable` | a model's answer does not read as EDN | [llm.md](llm.md) |
 | `:unreadable` | a line of a proposal or an edit batch does not read as EDN | [web.md](web.md) |
 | `:unreadable-store` | the records in that store do not thaw as sentexes — it was written by a build whose record classes differ | [storage.md](storage.md) |

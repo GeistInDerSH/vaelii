@@ -3,12 +3,14 @@
 (ns vaelii.asp-prover-test
   "The `(bravely S)` / `(cautiously S)` prover (`vaelii.impl.asp.prover`, opted in with
   `add-reasoner :brave-cautious`): a read-path brave/cautious classification of the current
-  dilemmas that commits nothing.  Solver-dependent tests skip without a backend, where the
-  classification degrades to everything `:supportable`; the not-assertible refusal does not,
-  since it is backend-independent."
+  dilemmas that commits nothing.  Backend-dependent tests need a real solver to enumerate
+  optima; the solve-free tests force the no-backend path (`with-redefs` on
+  `solver/available?`) so they read the JTMS bracket (`label/classify-local`) and run
+  everywhere, and the not-assertible refusal is backend-independent too."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [vaelii.core :as v]
+            [vaelii.impl.asp.label :as label]
             [vaelii.impl.asp.prover :as prover]
             [vaelii.impl.asp.solver :as solver]
             [vaelii.impl.rules :as vr]
@@ -32,6 +34,39 @@
     {:quaker quaker :pacifist pacifist :nixon nixon
      :pos (v/handle-of kb (list pacifist nixon)             'CxUniverse)
      :neg (v/handle-of kb (list 'not (list pacifist nixon)) 'CxUniverse)}))
+
+(defn- bare-rule
+  "A monotone forward rule — no defeasibility of its own, so it fires from a believed
+  antecedent whichever side of a dilemma that belief rests on."
+  [antes conseq]
+  (list 'set/forwardRule (vr/rule-sentence antes conseq)))
+
+(defn- extended-nixon
+  "A Nixon diamond with two downstream conclusions: `ethical` follows from **either**
+  side of the `pacifist`/`¬pacifist` dilemma (so it holds under every resolution), and
+  `opposes` follows from the pacifist side **only** (so it holds under some resolution and
+  not others).  Returns the sentences and handles the tests read."
+  [kb]
+  (let [quaker (tu/tmp-pred) pacifist (tu/tmp-pred) republican (tu/tmp-pred)
+        ethical (tu/tmp-pred) opposes (tu/tmp-pred) nixon (tu/tmp-ind)]
+    (v/assert kb (default-rule [(list quaker '?x)]     (list pacifist '?x))             'CxUniverse)
+    (v/assert kb (default-rule [(list republican '?x)] (list 'not (list pacifist '?x))) 'CxUniverse)
+    (v/assert kb (bare-rule [(list pacifist '?x)]             (list ethical '?x)) 'CxUniverse)
+    (v/assert kb (bare-rule [(list 'not (list pacifist '?x))] (list ethical '?x)) 'CxUniverse)
+    (v/assert kb (bare-rule [(list pacifist '?x)]             (list opposes '?x)) 'CxUniverse)
+    (v/assert kb (list quaker nixon)     'CxUniverse)
+    (v/assert kb (list republican nixon) 'CxUniverse)
+    {:nixon nixon
+     :pos-form   (list pacifist nixon)
+     :neg-form   (list 'not (list pacifist nixon))
+     :ethical-form (list ethical nixon)
+     :opposes-form (list opposes nixon)
+     :quaker-form  (list quaker nixon)
+     :pos     (v/handle-of kb (list pacifist nixon)             'CxUniverse)
+     :neg     (v/handle-of kb (list 'not (list pacifist nixon)) 'CxUniverse)
+     :ethical (v/handle-of kb (list ethical nixon) 'CxUniverse)
+     :opposes (v/handle-of kb (list opposes nixon) 'CxUniverse)
+     :quaker  (v/handle-of kb (list quaker nixon)  'CxUniverse)}))
 
 (deftest brave-cautious-separates-forced-from-arbitrary
   ;; In a Nixon diamond both sides are IN and neither is forced; an ordinary `ask` cannot
@@ -112,3 +147,195 @@
       (let [{:keys [pacifist nixon]} (nixon-diamond kb)]
         (is (v/ask? kb (list 'bravely    (list pacifist nixon)) 'CxUniverse))
         (is (not (v/ask? kb (list 'cautiously (list pacifist nixon)) 'CxUniverse)))))))
+
+;; ---- the solve-free bracket (no backend needed) --------------------------
+;; The `grounded-forcing-out` primitive and the bracket's scaling are pure JTMS — no ASP —
+;; so they live in `grounded_forcing_out_test`.  These exercise the classifier and prover.
+
+(deftest classify-local-brackets-the-dilemma
+  ;; The solve-free classifier, read directly.  A conclusion drawn from BOTH sides of the
+  ;; one dilemma holds under every resolution, so classify-local places it in
+  ;; `:true`; a one-sided conclusion and the dilemma members themselves are `:supportable`;
+  ;; the monotonic background is in neither (the prover reads it off belief).
+  (tu/with-neutral-kb [kb tu/fresh]
+    (let [{:keys [pos neg ethical opposes quaker]} (extended-nixon kb)
+          cls (label/classify-local kb)]
+      (is (some? cls))
+      (is (= #{} (:false cls)))
+      (testing "a conclusion that holds either way is skeptical"
+        (is (contains? (:true cls) ethical))
+        (is (not (contains? (:supportable cls) ethical))))
+      (testing "the dilemma sides and a one-sided conclusion are credulous-only"
+        (is (contains? (:supportable cls) pos))
+        (is (contains? (:supportable cls) neg))
+        (is (contains? (:supportable cls) opposes))    ; rests on the pacifist side alone
+        (is (not (contains? (:true cls) pos)))
+        (is (not (contains? (:true cls) opposes))))
+      (testing "monotonic background is in neither bracket"
+        (is (not (contains? (:supportable cls) quaker)))
+        (is (not (contains? (:true cls) quaker)))))))
+
+(deftest solve-free-brave-cautious
+  ;; Forcing the no-backend path (`with-redefs`), the prover reads the solve-free bracket:
+  ;; brave/cautious hold without enumerating optima, and a one-sided downstream conclusion
+  ;; is correctly not cautious — where base belief alone, believing both dilemma sides,
+  ;; would report it cautious.
+  (with-redefs [solver/available? (constantly false)]
+    (tu/with-neutral-kb [kb tu/fresh]
+      (v/add-reasoner kb :brave-cautious)
+      (let [{:keys [pos-form neg-form ethical-form opposes-form quaker-form]} (extended-nixon kb)]
+        (testing "each dilemma side is bravely true, not cautiously"
+          (is (v/ask? kb (list 'bravely    pos-form) 'CxUniverse))
+          (is (v/ask? kb (list 'bravely    neg-form) 'CxUniverse))
+          (is (not (v/ask? kb (list 'cautiously pos-form) 'CxUniverse)))
+          (is (not (v/ask? kb (list 'cautiously neg-form) 'CxUniverse))))
+        (testing "a conclusion drawn from both sides is cautiously true — it holds either way"
+          (is (v/ask? kb (list 'bravely    ethical-form) 'CxUniverse))
+          (is (v/ask? kb (list 'cautiously ethical-form) 'CxUniverse)))
+        (testing "a one-sided downstream conclusion is bravely true but not cautiously"
+          (is (v/ask? kb (list 'bravely    opposes-form) 'CxUniverse))
+          (is (not (v/ask? kb (list 'cautiously opposes-form) 'CxUniverse))))
+        (testing "the monotonic background is both brave and cautious"
+          (is (v/ask? kb (list 'bravely    quaker-form) 'CxUniverse))
+          (is (v/ask? kb (list 'cautiously quaker-form) 'CxUniverse)))))))
+
+(deftest a-both-sided-conclusion-is-an-ordinary-believed-sentex
+  ;; The practical query, without the modal: a conclusion drawn from both sides of a
+  ;; dilemma is believed and explained like any other. `ask` returns it, and `why` gives a
+  ;; proof tree deriving it from *each* side — the same fact `(cautiously …)` reports as
+  ;; skeptical, read here as an ordinary justification rather than a modal. No reasoner and
+  ;; no backend are needed.
+  (tu/with-neutral-kb [kb tu/fresh]
+    (let [{:keys [ethical ethical-form pos neg]} (extended-nixon kb)]
+      (testing "it answers an ordinary query"
+        (is (true? (v/in? kb ethical)))
+        (is (v/ask? kb ethical-form 'CxUniverse)))
+      (testing "why explains it, deriving it from both dilemma sides"
+        (let [tree  (v/why kb ethical)
+              antes (into #{} (mapcat #(map :handle (:because %))) (:support tree))]
+          (is (:believed? tree))
+          (is (= 2 (count (:support tree))) "one justification per side")
+          (is (contains? antes pos) "derived from the pacifist side")
+          (is (contains? antes neg) "derived from the non-pacifist side"))))))
+
+;; ---- excluded conclusions and multiple dilemmas --------------------------
+;; classify-local classifies over the dilemmas' optimal resolutions, so it reaches the two
+;; cases the earlier per-dilemma reading could not: a conclusion that holds in NO resolution
+;; (`:false`), and a member that a coupled cluster keeps or drops in every resolution.
+
+(deftest classify-local-excludes-a-conclusion-drawn-from-both-sides
+  ;; A conclusion derived from both sides of one dilemma AT ONCE — `(and (pac N) (not (pac
+  ;; N)))` — is believed only because base belief holds both sides together, which no single
+  ;; resolution does. Every resolution drops one side, so it holds in none: `:false`, not
+  ;; `:supportable`. The prover reports neither brave nor cautious.
+  (with-redefs [solver/available? (constantly false)]
+    (tu/with-neutral-kb [kb tu/fresh]
+      (v/add-reasoner kb :brave-cautious)
+      (let [q (tu/tmp-pred) r (tu/tmp-pred) pac (tu/tmp-pred) weird (tu/tmp-pred) n (tu/tmp-ind)]
+        (v/assert kb (default-rule [(list q '?x)] (list pac '?x))             'CxUniverse)
+        (v/assert kb (default-rule [(list r '?x)] (list 'not (list pac '?x))) 'CxUniverse)
+        (v/assert kb (bare-rule [(list pac '?x) (list 'not (list pac '?x))] (list weird '?x)) 'CxUniverse)
+        (v/assert kb (list q n) 'CxUniverse)
+        (v/assert kb (list r n) 'CxUniverse)
+        (let [w-form (list weird n) w (v/handle-of kb w-form 'CxUniverse)
+              cls    (label/classify-local kb)]
+          (testing "it is believed — base belief holds both dilemma sides at once"
+            (is (v/in? kb w)))
+          (testing "yet it is excluded, not merely credulous"
+            (is (contains? (:false cls) w))
+            (is (not (contains? (:supportable cls) w))))
+          (testing "so the prover reports neither brave nor cautious"
+            (is (not (v/ask? kb (list 'bravely    w-form) 'CxUniverse)))
+            (is (not (v/ask? kb (list 'cautiously w-form) 'CxUniverse)))))))))
+
+(defn- three-way-rebuttal
+  "Three defaults where `b` rebuts BOTH `a` and `c` (and each rebuts `b`).  Defeating `b`
+  alone resolves both dilemmas at cost one, so `a` and `c` hold in every optimal resolution
+  and `b` in none — a joint outcome a per-dilemma reading cannot see, since dropping `a`
+  resolves `a`'s dilemma at the same nominal cost as dropping `b`.  The dilemmas are coupled
+  through the derivation graph, so classify-local enumerates them as one cluster."
+  [kb]
+  (let [pa (tu/tmp-pred) pb (tu/tmp-pred) pc (tu/tmp-pred) x (tu/tmp-ind)]
+    (doseq [[p q] [[pa pb] [pb pa] [pc pb] [pb pc]]]
+      (v/assert kb (default-rule [(list p x)] (list 'not (list q x))) 'CxUniverse))
+    (v/assert kb (list pa x) 'CxUniverse)
+    (v/assert kb (list pb x) 'CxUniverse)
+    (v/assert kb (list pc x) 'CxUniverse)
+    {:a-form (list pa x) :b-form (list pb x) :c-form (list pc x)
+     :a (v/handle-of kb (list pa x) 'CxUniverse)
+     :b (v/handle-of kb (list pb x) 'CxUniverse)
+     :c (v/handle-of kb (list pc x) 'CxUniverse)}))
+
+(deftest classify-local-resolves-coupled-dilemmas
+  ;; Two coupled dilemmas (`b` rebuts both `a` and `c`). The optimum defeats `b` alone, so
+  ;; `a` and `c` are `:true` and `b` is `:false` — where the earlier per-dilemma reading,
+  ;; treating dropping `a` as a resolution of a's own dilemma, called `a` `:supportable`.
+  (with-redefs [solver/available? (constantly false)]
+    (tu/with-neutral-kb [kb tu/fresh]
+      (v/add-reasoner kb :brave-cautious)
+      (let [{:keys [a b c a-form b-form c-form]} (three-way-rebuttal kb)
+            cls (label/classify-local kb)]
+        (testing "the doubly-rebutted member holds in no optimal resolution"
+          (is (contains? (:false cls) b))
+          (is (not (v/ask? kb (list 'bravely    b-form) 'CxUniverse)))
+          (is (not (v/ask? kb (list 'cautiously b-form) 'CxUniverse))))
+        (testing "the two singly-rebutted members hold in every optimal resolution"
+          (is (contains? (:true cls) a))
+          (is (contains? (:true cls) c))
+          (is (v/ask? kb (list 'cautiously a-form) 'CxUniverse))
+          (is (v/ask? kb (list 'cautiously c-form) 'CxUniverse)))))))
+
+(deftest classify-local-classifies-independent-dilemmas-apart
+  ;; Two Nixon diamonds on disjoint terms are separate clusters, so each both-sided
+  ;; conclusion is skeptical on its own and each member stays credulous-only — the two
+  ;; dilemmas do not smear into each other's classification.
+  (with-redefs [solver/available? (constantly false)]
+    (tu/with-neutral-kb [kb tu/fresh]
+      (v/add-reasoner kb :brave-cautious)
+      (let [mk (fn []
+                 (let [q (tu/tmp-pred) r (tu/tmp-pred) p (tu/tmp-pred) e (tu/tmp-pred) i (tu/tmp-ind)]
+                   (v/assert kb (default-rule [(list q '?x)] (list p '?x))             'CxUniverse)
+                   (v/assert kb (default-rule [(list r '?x)] (list 'not (list p '?x))) 'CxUniverse)
+                   (v/assert kb (bare-rule [(list p '?x)]             (list e '?x)) 'CxUniverse)
+                   (v/assert kb (bare-rule [(list 'not (list p '?x))] (list e '?x)) 'CxUniverse)
+                   (v/assert kb (list q i) 'CxUniverse)
+                   (v/assert kb (list r i) 'CxUniverse)
+                   {:e-form (list e i) :e (v/handle-of kb (list e i) 'CxUniverse)
+                    :p (v/handle-of kb (list p i) 'CxUniverse)}))
+            d1  (mk) d2 (mk)
+            cls (label/classify-local kb)]
+        (testing "each diamond's both-sided conclusion is skeptical on its own"
+          (is (contains? (:true cls) (:e d1)))
+          (is (contains? (:true cls) (:e d2)))
+          (is (v/ask? kb (list 'cautiously (:e-form d1)) 'CxUniverse))
+          (is (v/ask? kb (list 'cautiously (:e-form d2)) 'CxUniverse)))
+        (testing "each dilemma member stays credulous-only"
+          (is (contains? (:supportable cls) (:p d1)))
+          (is (contains? (:supportable cls) (:p d2))))))))
+
+(deftest classify-local-agrees-with-the-backend-on-dilemma-members
+  ;; The prover reads the backend's `classify-program` when a backend is reachable and
+  ;; `classify-local` otherwise, so the two classify each dilemma member the same way.
+  ;; `classify-program` classifies the members a `Program` holds; the comparison covers every
+  ;; one of those that `classify-local` also classifies.
+  ;;
+  ;; The fixtures are dilemmas whose members derive from none of the other members.
+  ;; `dilemma-program` encodes each member as an independent choice with no derivation
+  ;; between members, so on `three-way-rebuttal` the backend counts defeating `b` and the
+  ;; `¬a`/`¬c` it derives as three defeats and reports all six members `:supportable`, while
+  ;; `classify-local` reads the cascade and resolves the cluster by defeating `b` alone.
+  (when (solver/available?)
+    (doseq [[title build] [["one diamond" extended-nixon]
+                           ["two independent diamonds" #(do (extended-nixon %) (extended-nixon %))]]]
+      (testing title
+        (tu/with-neutral-kb [kb tu/fresh]
+          (build kb)
+          (let [program (label/dilemma-program kb)
+                exact   (label/classify-program program)
+                local   (label/classify-local kb)
+                class   (fn [cls h] (some #(when (contains? (cls %) h) %) [:true :supportable :false]))
+                shared  (filter #(class local %) (:assumptions program))]
+            (is (seq shared) "the comparison covers at least one member")
+            (doseq [h shared]
+              (is (= (class exact h) (class local h))
+                  (str "member " h " classifies differently")))))))))

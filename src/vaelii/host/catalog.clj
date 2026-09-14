@@ -212,6 +212,27 @@
         (and (map? m) (or (:format-version m) (:variant m)))             :dump
         (some? (readable-edn (file-at (file-at d "records") "format.edn"))) :store))))
 
+(defn- store-backend
+  "The backend a store on disk wants, read off its layout — by what sits in `index/`
+  beside the durable records:
+
+    * a mapped index image (`index/trie.csr`, `vaelii.impl.disk.index-snapshot`) →
+      `:disk-snapshot`, which maps the image back rather than rebuilding — the fast open.
+    * a write-ahead-logged KV index (`index/kv.log`) → `:disk-log`, whose index is durable.
+    * no `index/` at all → `:disk-columnar`, which rebuilds the derived index from the
+      records on open (docs/storage.md).
+
+  Opening a store as the wrong one is not a slowdown but an emptiness: a store whose index
+  is derived, opened `:disk-log`, finds no durable index and surfaces no records — a
+  0-sentex KB over a full store, which is what this branch did for every store.
+  `:disk-dense` / `:disk-memory` share the columnar on-disk shape and read back correctly
+  as `:disk-columnar` — the index representation is the reader's to choose."
+  [path]
+  (cond
+    (.exists (file-at path "index" "trie.csr")) :disk-snapshot
+    (.exists (file-at path "index" "kv.log"))   :disk-log
+    :else                                       :disk-columnar))
+
 (defn- corpus-scale
   "How big a found corpus says it is — from the report its writer left beside it, which
   is the only thing that knows before a load."
@@ -737,7 +758,7 @@
   [kb path]
   (when-let [h (cap/some-sentex-id (:records kb))]
     (let [r (p/get-sentex (:records kb) h)]
-      (when-not (:sentence r)
+      (when-not (or (:sentence r) (:antecedent r))
         (throw (ex-info (str "the store at " path " holds records this build cannot read"
                              " — they thaw as " (pr-str (some-> r keys vec))
                              ", not as sentexes.  It was written by a build whose record"
@@ -813,16 +834,23 @@
       :dump     (import/import-dump (open!) path {:belief?     (belief-mode (:belief? params))
                                                   :on-progress progress!})
       ;; a store is already a KB — opening it *is* the load.  Opening is not quick at
-      ;; scale (the record log is scanned and the index map rebuilt in RAM) and it
-      ;; reports nothing while it runs, so say what is happening before going in
-      :store    (let [_  (progress! {:phase :open :done 0
-                                     :note "scanning the record log and rebuilding the index"})
-                      kb (v/open-kb {:backend :disk-log :dir path :recover? false})]
-                  (note-kb! kb {:backend :disk-log :dir path :attached? true})
+      ;; scale (the record log is scanned and the index rebuilt) and it reports nothing
+      ;; while it runs, so say what is happening before going in.  The backend is read off
+      ;; the store's own layout, never assumed: opening a `:disk-columnar` store as
+      ;; `:disk-log` surfaces no records at all (docs/storage.md).  `:recover? :auto`
+      ;; installs a `:disk-snapshot` store's belief image when it still describes the
+      ;; records and otherwise rebuilds — so opening carries belief when the params ask for
+      ;; it, and no second `recover` follows it.
+      :store    (let [backend  (store-backend path)
+                      recover? (boolean (:recover? params))
+                      _  (progress! {:phase :open :done 0
+                                     :note (if recover?
+                                             "opening the store and recovering belief and the taxonomy"
+                                             "opening the store — records only, recover to build belief")})
+                      kb (v/open-kb {:backend backend :dir path
+                                     :recover? (if recover? :auto false)})]
+                  (note-kb! kb {:backend backend :dir path :attached? true})
                   (check-readable! kb path)
-                  (when (:recover? params)
-                    (progress! {:phase :recover :done 0 :note "rebuilding belief"})
-                    (v/recover kb))
                   {})
       (throw (ex-info (str "unknown KB source kind " (pr-str kind) " — want :core,"
                            " :starter, :generated, :corpus, :dump or :store")
@@ -1042,7 +1070,7 @@
            (run-in (fn []
                      (case backend
                        :memory  (when-let [kb (:kb (entry key))] (v/clear! kb))
-                       :disk-log (disk/close-dir! dir)
+                       (:disk-log :disk-columnar :disk-snapshot) (disk/close-dir! dir)
                        nil)))
            (catch Exception ex
              (let [why (or (.getMessage ex) (str (class ex)))]

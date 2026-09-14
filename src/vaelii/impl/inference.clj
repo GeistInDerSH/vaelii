@@ -464,7 +464,7 @@
   the way it was written.  nil when the handle names nothing (a retracted rule)."
   [kb handle]
   (when-let [sx (and handle (p/get-sentex (:records kb) handle))]
-    (sx/originalize (:sentence sx) (:varmap sx))))
+    (sx/originalize (sx/sentence-of sx) (:varmap sx))))
 
 (defn proof-tree
   "Why this node's conjunction follows — the derivation the search actually took, read

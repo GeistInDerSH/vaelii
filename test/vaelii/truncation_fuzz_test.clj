@@ -66,7 +66,7 @@
   [kb]
   (into #{} (keep (fn [h]
                     (when-let [sx (p/get-sentex (:records kb) h)]
-                      [(pr-str (:sentence sx)) (pr-str (:context sx))])))
+                      [(pr-str (v/sentence-of sx)) (pr-str (:context sx))])))
         (p/sentex-ids (:records kb))))
 
 ;; ---- files -------------------------------------------------------------

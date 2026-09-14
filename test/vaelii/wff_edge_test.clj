@@ -40,31 +40,27 @@
            (ex-type #(v/assert kb (list 'genlCx CxAlpha CxAlpha) 'CxUniverse)))
         "a context that genlCxs itself")))
 
-(tu/deftest-kb genlCx-admits-a-cycle-through-another-context
-  ;; Unlike `genl`, a context cycle is a claim rather than a contradiction: it says the
-  ;; two contexts see each other, which is what OpenCyc's `genlMt` states of
-  ;; BaseKB and UniversalVocabularyMt.  Visibility is reachability, and reachability
-  ;; over a cycle is perfectly well defined — see the note atop `wff`.
+(tu/deftest-kb genlCx-rejects-a-cycle-through-another-context
+  ;; Like `genl`, a context cycle is refused at assert: `genlCx-problems` reads the
+  ;; global `genlCx` closure and refuses an edge whose super already sees its sub, so
+  ;; the context hierarchy is a partial order.  The one-way edges below are admitted;
+  ;; the edge that would close the loop is not, and nothing it would have changed does.
+  ;; See the note atop `wff`.
   (tu/with-terms [CxAlpha CxBeta]
     (v/assert kb (list 'genlCx CxAlpha 'CxUniverse) 'CxUniverse)
     (v/assert kb (list 'genlCx CxBeta CxAlpha) 'CxUniverse)
     (is (v/sees? kb CxBeta CxAlpha))
-    (is (not (v/sees? kb CxAlpha CxBeta)) "before the loop is closed")
-    (testing "closing the loop is admitted, and both directions then hold"
-      (v/assert kb (list 'genlCx CxAlpha CxBeta) 'CxUniverse)
-      (is (v/sees? kb CxAlpha CxBeta))
-      (is (v/sees? kb CxBeta CxAlpha)))
-    (testing "and each still sees what the other saw"
+    (is (not (v/sees? kb CxAlpha CxBeta)) "one-way before any loop")
+    (testing "the edge that would close the loop is refused, with the cycle error type"
+      (is (= :not-well-formed
+             (ex-type #(v/assert kb (list 'genlCx CxAlpha CxBeta) 'CxUniverse)))))
+    (testing "and the refused edge changed nothing: the one-way answer stands"
+      (is (not (v/sees? kb CxAlpha CxBeta)))
+      (is (v/sees? kb CxBeta CxAlpha))
       (is (v/sees? kb CxAlpha 'CxUniverse))
       (is (v/sees? kb CxBeta 'CxUniverse))
       (is (contains? (v/context-up kb CxBeta) CxAlpha))
-      (is (contains? (v/context-up kb CxAlpha) CxBeta))
-      (is (contains? (v/context-down kb CxAlpha) CxBeta)))
-    (testing "and retracting the back edge restores the one-way answer"
-      (v/retract! kb (v/handle-of kb (list 'genlCx CxAlpha CxBeta)
-                                  'CxUniverse))
-      (is (not (v/sees? kb CxAlpha CxBeta)))
-      (is (v/sees? kb CxBeta CxAlpha)))))
+      (is (not (contains? (v/context-up kb CxAlpha) CxBeta))))))
 
 (tu/deftest-kb genlCx-rejects-a-non-context-argument
   (tu/with-terms [CxAlpha]

@@ -53,12 +53,14 @@
   single-writer contract offers no snapshot to walk instead."
   (:require [clojure.java.io :as io]
             [taoensso.trove :as trove]
+            [vaelii.impl.belief-image :as belief-image]
             [vaelii.impl.io.fingerprint :as fp]
             [vaelii.impl.io.frames :as frames]
             [vaelii.impl.io.snapshot :as snapshot]
             [vaelii.impl.kv :as kv]
             [vaelii.impl.opts :as opts]
-            [vaelii.impl.protocols :as p])
+            [vaelii.impl.protocols :as p]
+            [vaelii.impl.sentex :as sx])
   (:import (java.io File)
            (java.time Instant)))
 
@@ -141,6 +143,11 @@
   Clojure record is already a map — and it is what drops the class name and the
   positional layout, which is the whole point of the format.
 
+  A rule frame adds `:sentence` — the `implies` form `sentex/sentence-of` builds from the
+  record's `:antecedent` and `:consequent` — because a rule record holds no sentence and
+  a dump's rule frame carries one, so the format a reader parses is the same whichever
+  build wrote it.
+
   A handle whose record has gone is skipped rather than written as a hole, so the
   count `meta.edn` reports is the count the stream holds.
 
@@ -152,7 +159,8 @@
    (keep (fn [id]
            (when-let [rec (fetch store id)]
              (when tap (tap id rec))
-             (into {} rec)))
+             (cond-> (into {} rec)
+               (some? (:antecedent rec)) (assoc :sentence (sx/sentence-of rec)))))
          ids)))
 
 (defn- provenance-frames
@@ -207,7 +215,7 @@
 
 (def ^:private export-opt-keys
   "Every key `export!` reads."
-  #{:variant :compression :chunk-size :provenance? :on-progress})
+  #{:variant :compression :chunk-size :provenance? :belief? :on-progress})
 
 (defn- check-export-opts!
   "Refuse an opts key `export!` does not read, and a non-nil non-map `opts` — before
@@ -282,6 +290,14 @@
   record and 3.8× the records' bytes, for a load twice as fast —
   so it is opt-in rather than the default.
 
+  `:belief? true`, the default, also writes `belief/`: the KB's belief image
+  (`vaelii.impl.belief-image`), stamped with content fingerprints of the sentexes and the
+  justifications this dump streams, taken on the same two walks.  An import that lands
+  exactly those records under the same source identity installs it in place of `recover`.
+  It is written only for a KB on the dense network, with the default provers and solver,
+  whose network covers its records; the summary's `:belief-image` is `:written`,
+  `:not-writable` or `:omitted` (`:belief? false`).  A phase `:belief` reports it.
+
   `dir` must not exist or must be empty (`:type :not-empty`), and `meta.edn` is
   written **last**.  The provenance stream is omitted entirely when no handle carries
   provenance; the reader already treats it as optional.
@@ -297,9 +313,9 @@
   that makes this the right knob for a dump meant to be downloaded, and the wrong one for
   a backup."
   ([kb dir] (export! kb dir {}))
-  ([kb dir {:keys [variant compression chunk-size on-progress provenance?]
+  ([kb dir {:keys [variant compression chunk-size on-progress provenance? belief?]
             :or   {variant :records compression :gzip chunk-size 10000
-                   on-progress no-progress provenance? true}
+                   on-progress no-progress provenance? true belief? true}
             :as   opts}]
    (check-export-opts! opts)
    (check-compression! compression)
@@ -321,12 +337,16 @@
          ;; the fingerprint rides the sentex walk rather than making a second one —
          ;; the writer already fetches every record, and on `:disk` that is a page read
          ;; apiece
-         fprint   (when index? (fp/accumulator))
+         ;; the belief image rides the same two walks: its stamp is the content
+         ;; fingerprint of the sentexes and of the justifications this dump streams
+         image?   (and belief? (belief-image/writable? kb))
+         fprint   (when (or index? image?) (fp/accumulator))
+         jprint   (when image? (fp/accumulator fp/justification-hash))
          sx-n (frames/write-frames! (io/file d frames/sentex-file)
                                     (record-frames records p/get-sentex sx-ids fprint)
                                     (assoc frame-opts :on-chunk (chunk :sentexes (count sx-set))))
          j-n  (frames/write-frames! (io/file d frames/justification-file)
-                                    (record-frames records p/get-justification j-ids)
+                                    (record-frames records p/get-justification j-ids jprint)
                                     (assoc frame-opts :on-chunk (chunk :justifications (count j-set))))
          ;; `seq` realizes only as far as the first handle carrying provenance, so a KB
          ;; with none writes no file rather than an empty one.  The total is unknown
@@ -341,7 +361,12 @@
          i-n  (if index?
                 (write-index! d (:index kb) (fprint)
                               (assoc frame-opts :on-chunk (chunk :index-entries nil)))
-                0)]
+                0)
+         image (when image?
+                 (on-progress {:phase :belief :done 0 :total 1})
+                 (belief-image/write-sections!
+                  kb (io/file d "belief")
+                  (belief-image/stamp kb {:sentexes (fprint) :justifications (jprint)})))]
      (on-progress {:phase :meta :done 0 :total 1})
      (write-meta! d (array-map
                      :format              format-marker
@@ -355,6 +380,7 @@
                      :justification-count j-n
                      :provenance-count    p-n
                      :index-entry-count   i-n
+                     :belief-image        (some? image)
                      :handle-policy       :preserved
                      :written-at          (str (Instant/now))
                      :writer              (writer-id)))
@@ -363,6 +389,7 @@
                     :justifications j-n
                     :provenance     p-n
                     :index-entries  i-n
+                    :belief-image   (cond image :written belief? :not-writable :else :omitted)
                     :bytes          (dir-bytes d)
                     :elapsed-ms     (quot (- (System/nanoTime) t0) 1000000)
                     :dir            (.getAbsolutePath d)}]

@@ -34,12 +34,12 @@
   [kb]
   (let [recs (:records kb)
         tms  (:tms kb)
-        sent (fn [h] (let [s (p/get-sentex recs h)] [(:sentence s) (:context s)]))]
+        sent (fn [h] (let [s (p/get-sentex recs h)] [(v/sentence-of s) (:context s)]))]
     {:sentexes
      (sort-by pr-str
               (map (fn [id]
                      (let [s (p/get-sentex recs id)]
-                       [(:sentence s) (:context s) (:polarity s) (:strength s)
+                       [(v/sentence-of s) (:context s) (:strength s)
                         (boolean (jtms/in? tms id))]))
                    (p/sentex-ids recs)))
      :justifications
@@ -222,7 +222,7 @@
                              (mapcat :antecedents)
                              (keep #(p/get-sentex (:records kb) %))
                              (remove :antecedent)      ; the rule handle is in there too
-                             (map (juxt :sentence :context)))
+                             (map (juxt v/sentence-of :context)))
                        (jtms/supports (:tms kb) h)))
               "and those antecedents are the two facts")))
       (agree (both-ways load!) "an assert/defeat/undefeat sequence"))))

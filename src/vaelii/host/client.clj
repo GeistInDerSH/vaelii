@@ -697,6 +697,13 @@
   [conn k y]
   (call conn :sees? [k y]))
 
+(defn sentence-of
+  "A sentex map's canonical sentence: a literal's `:sentence`, or for a rule the `(implies
+  <antecedent> <consequent>)` form built from its `:antecedent` and `:consequent` — a rule
+  map carries no `:sentence` of its own."
+  [conn sx]
+  (call conn :sentence-of [sx]))
+
 (defn sentex
   "The sentex for a handle as a **map**, or nil."
   [conn handle]

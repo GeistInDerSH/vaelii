@@ -183,7 +183,7 @@
 (defn- snapshot [kb]
   {:believed   (into #{}
                      (comp (keep #(p/get-sentex (:records kb) %))
-                           (map (juxt :sentence :context :polarity)))
+                           (map (juxt v/sentence-of :context)))
                      (jtms/in-datums (:tms kb)))
    :dilemmas   (into #{} (map clash-key) (v/contradictions kb))
    :conflicts  (into #{} (map clash-key) (v/conflicts kb))
@@ -528,7 +528,7 @@
                  :r1  #(v/assert-rule % [(list seenA '?x)] (list derivedQ '?x) CxBase {:direction :forward})
                  :r2  #(v/assert-rule % [(list seenB '?x)] (list derivedQ '?x) CxBase {:direction :forward})
                  :neg #(v/assert % (list 'not (list derivedQ Subject)) CxBase)}
-          sent  (fn [kb x] (if (integer? x) (:sentence (v/sentex kb x)) x))
+          sent  (fn [kb x] (if (integer? x) (v/sentence-of (v/sentex kb x)) x))
           read! (fn [order]
                   (let [kb (tu/fresh)]
                     (try
@@ -565,8 +565,8 @@
         (reify p/RecordStore
           (get-sentex [_ id]
             (case (long id)
-              1 {:id 1 :sentence 'clshArityless    :polarity :positive :context 'CxUniverse}
-              2 {:id 2 :sentence '(clsh_member CK)  :polarity :positive :context 'CxUniverse}
+              1 {:id 1 :sentence 'clshArityless    :context 'CxUniverse}
+              2 {:id 2 :sentence '(clsh_member CK)  :context 'CxUniverse}
               nil)))
         idx #_{:clj-kondo/ignore [:missing-protocol-method]}
         (reify p/IndexStore

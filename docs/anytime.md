@@ -144,15 +144,18 @@ for?* (`vaelii.impl.provers/cost-tiers`):
 ```
 
 - `:lookup` — a bounded single-step retrieval: an O(1) ground test (reflexive,
-  `evaluate`, `different`, the evaluable and quantity comparisons), a cached closure /
+  `evaluate`, `different`, the evaluable and quantity comparisons, the arity-position
+  query `admitsArgnum`), a cached closure /
   metadata read (genl/genlCx transitivity, disjointness, arg-type), or one index hit
   (facts, symmetric, inverse). All three are one bounded
   step, lazy to the first result, and no decision turns on which of the three it is, so
-  they fold into one tier. Eleven of the shipped provers sit here.
-- `:compute` — work over stored facts before the first answer, and nine provers claim
+  they fold into one tier. Twelve of the shipped provers sit here.
+- `:compute` — work over stored facts before the first answer, and eleven provers claim
   it: a declared-`transitive` predicate walking its closure, `transitiveInArg`, `unknown`,
-  `thereExists`, `forall`, a declared-complete extent's negation, the aggregates, a modal
-  belief projection, and the argument-type meta-predicates read up `genl`. `thereExists`
+  `thereExists`, `forall`, a declared-complete extent's negation, the two
+  definitional-membership provers (`defnSufficient` and the `defnNecessary` negation), the
+  aggregates, a modal belief projection, and the argument-type meta-predicates read up
+  `genl`. `thereExists`
   and the aggregates are the ones `{:max-cost :lookup}` is really about, since a `count`
   is a census of a whole extent.
 - `:search` — recursive backward chaining, open-ended proof search. **Unoccupied**, and

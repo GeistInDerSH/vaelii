@@ -381,8 +381,8 @@
       (finally (tu/clear-kb! source) (tu/clear-kb! seat) (rm-rf! dump)))))
 
 ;;; ── a NEGATIVE fact round-trips (a `:false` sentex keeps its `not`) ────
-;;; Regression: a stored `(not S)` keeps the `not` in its `:sentence` with `:polarity :negative`
-;;; (docs/storage.md).  A marker must carry that field UNCHANGED — an earlier `assertable`
+;;; Regression: a stored `(not S)` keeps the `not` in its `:sentence`, which is the whole
+;;; of its sign (docs/storage.md).  A marker must carry that field UNCHANGED — an earlier `assertable`
 ;;; re-wrapped it, double-negating the sentence into a positive one that resolved to
 ;;; nothing, and it failed as `:not-received` — indistinguishable from "not pulled yet".
 
@@ -393,9 +393,8 @@
     (rm-rf! dump)
     (try
       (let [nh (v/assert source '(not (happy Rex)) 'CxAtlas {:creator 'AgentAtlas})]
-        (testing "the store keeps the `not` in :sentence, with :polarity :negative"
-          (is (= '(not (happy Rex)) (:sentence (v/sentex source nh))))
-          (is (= :negative (:polarity (v/sentex source nh)))))
+        (testing "the store keeps the `not` in :sentence"
+          (is (= '(not (happy Rex)) (:sentence (v/sentex source nh)))))
         (d/publish! source dump)
         (d/pull! seat dump)
         (let [mk (d/marker source nh)]

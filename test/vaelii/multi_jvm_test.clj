@@ -5,7 +5,7 @@
   else to observe it from.
 
   Not \"integration tests\" — the whole suite is that already, and CONTRIBUTING.md §5
-  says so in as many words — and not end-to-end either: three of the four watch one
+  says so in as many words — and not end-to-end either: four of the five watch one
   contract from the only vantage that can see it, rather than walking a user's path
   through a stack.  What they share is the **process boundary**, which is also what makes
   them expensive, so they carry `^:multi-jvm` and no selector reaches them.  `lein test`,
@@ -20,6 +20,7 @@
   | a killed writer leaves no lock to reap | `disk/lock.clj` | the OS releases on exit, and a JVM cannot watch its own |
   | a KB another process wrote opens cold | `docs/storage.md` | two KBs over one directory **share** the store in-process, and every process-global cache survives a `close-dir!` |
   | daemon and CLI cannot own one directory | `docs/operations.md` | the daemon is the other process |
+  | a killed logged writer restores to a prefix of its operations | `vaelii.impl.seal` | SIGKILL stops the writer inside an operation, a frame append or a seal, and a process cannot do that to itself and read the result |
 
   **These own their directories and touch no shared space.**  Every KB here is a fresh
   temp directory, so the suite's scratch/isolated block is not involved and there is
@@ -39,6 +40,8 @@
             [vaelii.core :as v]
             [vaelii.impl.disk.backend :as backend]
             [vaelii.impl.disk.lock :as lock]
+            [vaelii.impl.protocols :as p]
+            [vaelii.impl.seal :as seal]
             [vaelii.multi-jvm :as mj])
   (:import [java.io File]
            [java.nio.file Files]
@@ -219,6 +222,103 @@
               (is (str/includes? (str (:holder (ex-data e))) (str (mj/pid child)))
                   "naming the daemon as the holder"))))))))
 
+;; ---- a logged writer, killed -----------------------------------------------
+
+(def ^:private crash-workload
+  "The logged writer's operations, as one source text the child and this process both
+  evaluate: `:setup` runs before the log's first seal, then `(op kb i)` for i from 0.  An
+  even i asserts a new fact; an odd i retracts a fact `:setup` stored, so the log fsyncs
+  that operation's frame before the retraction writes."
+  "{:setup (fn [kb]
+            (vaelii.core/assert
+             kb '(set/forwardRule (implies (and (mjc_animal ?x)) (mjc_mortal ?x))) 'CxUniverse)
+            (dotimes [i 200]
+              (vaelii.core/assert kb (list 'mjc_animal (symbol (str \"MjcOld\" i))) 'CxUniverse)))
+    :op    (fn [kb i]
+             (if (even? i)
+               (vaelii.core/assert kb (list 'mjc_animal (symbol (str \"MjcNew\" i))) 'CxUniverse)
+               (vaelii.core/retract!
+                kb (vaelii.core/handle-of
+                    kb (list 'mjc_animal (symbol (str \"MjcOld\" (quot i 2)))) 'CxUniverse))))}")
+
+(def ^:private crash-ops
+  "How many operations the logged writer runs when nothing kills it."
+  400)
+
+(def ^:private logged-writer-program
+  "Open a `:disk-snapshot` directory, run `crash-workload`'s setup, attach an operation
+  log, and run the operations, saying after each one that it returned.  The parent kills
+  it part-way; a writer that finishes first waits to be killed."
+  (str "(require '[vaelii.core :as v] '[vaelii.impl.seal :as seal])
+   (v/set-log-level :error)
+   (def workload " crash-workload ")
+   (let [dir (first *command-line-args*)
+         kb  (v/open-kb {:backend :disk-snapshot :dir dir :recover? false})
+         _   ((:setup workload) kb)
+         lkb (seal/attach! kb)]
+     (println \"##vaelii## sealed\")
+     (flush)
+     (dotimes [i " crash-ops "]
+       ((:op workload) lkb i)
+       (println (str \"##vaelii## done \" i))
+       (flush))
+     (println \"##vaelii## finished\")
+     (flush)
+     (read-line))"))
+
+(defn- logged-view
+  "Every sentex `kb`'s records hold, as `[sentence context believed?]`."
+  [kb]
+  (into #{} (keep (fn [h]
+                    (when-let [sx (p/get-sentex (:records kb) h)]
+                      [(pr-str (:sentence sx)) (pr-str (:context sx)) (boolean (v/in? kb h))])))
+        (p/sentex-ids (:records kb))))
+
+(defn- matching-prefix
+  "The number m of `crash-workload` operations, `from` <= m <= `crash-ops`, after which a
+  fresh directory's view is `want`, or nil when no such m exists."
+  [want from]
+  (let [{:keys [setup op]} (eval (read-string crash-workload))]
+    (with-tmp
+      (fn [dir]
+        (let [kb (v/open-kb {:backend :disk-snapshot :dir dir :recover? false})]
+          (try
+            (setup kb)
+            (dotimes [i from] (op kb i))
+            (loop [m from]
+              (cond (= want (logged-view kb)) m
+                    (>= m crash-ops)          nil
+                    :else                     (do (op kb m) (recur (inc m)))))
+            (finally (v/close! kb))))))))
+
+(deftest ^:multi-jvm a-killed-logged-writer-restores-to-a-prefix-of-its-operations
+  ;; `vaelii.impl.seal`: a restore brings a directory to the state its last durable
+  ;; operation left.  SIGKILL stops the writer inside whichever operation, frame append or
+  ;; drift seal it had reached, and the page cache keeps every byte it wrote, so each
+  ;; state a kill leaves is one the log and the seal have to account for.
+  (with-tmp
+    (fn [dir]
+      (let [done (mj/with-child [child logged-writer-program dir]
+                   (mj/await-marker! child "sealed")
+                   (let [i (loop []
+                             (let [i (Long/parseLong (mj/await-marker! child "done"))]
+                               (if (< i 60) (recur) i)))]
+                     (mj/kill! child)
+                     (inc i)))
+            kb (v/open-kb {:backend :disk-snapshot :dir dir :recover? false})
+            r  (seal/restore! kb)]
+        (try
+          (if (:restored r)
+            (let [m (matching-prefix (logged-view (:kb r)) done)]
+              (is (some? m)
+                  "the restored records and belief are those of a prefix of the operations")
+              (is (and m (>= (long m) (long done)))
+                  (str "and the prefix holds the " done " operations the writer reported done")))
+            (is (#{:index :belief} (when (vector? (:reason r)) (first (:reason r))))
+                (str "a declined restore names an image, which only a kill inside a seal"
+                     " leaves: " (pr-str (dissoc r :kb)))))
+          (finally (v/close! (or (:kb r) kb))))))))
+
 ;; ---- the mark, checked over the sources ----------------------------------
 ;;
 ;; `llm_test` holds the same shape for `^:llm`, and for the same reason: a mark is a
@@ -253,7 +353,8 @@
   #{"a-second-jvm-holding-the-directory-is-refused-by-name"
     "a-killed-writer-leaves-no-lock-to-reap"
     "a-kb-another-process-wrote-opens-cold-and-recovers"
-    "a-daemon-in-another-process-answers-this-one-s-client"})
+    "a-daemon-in-another-process-answers-this-one-s-client"
+    "a-killed-logged-writer-restores-to-a-prefix-of-its-operations"})
 
 (defn- test-sources
   "Every test namespace's source, as `path -> text`."

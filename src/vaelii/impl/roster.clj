@@ -4,10 +4,10 @@
   "A **live-handle roster**: what `sentex-ids` / `justification-ids` / `premise-ids` hand
   back, for a store big enough that the shape matters.
 
-  The three enumerations answer a `java.util.Set` of handles, and every store the engine
-  ships answers a `PersistentHashSet<Long>` — the memory store because that is what its own
-  state already is, the disk store by materializing one from the `LiveRoster` below at the
-  call.  At the scale a server-backed store exists for, that shape *is* the cost: measured
+  The three enumerations answer a `java.util.Set` of handles.  The memory store answers a
+  `PersistentHashSet<Long>`, because that is what its own state already is; the disk store
+  answers a `HandleRoster` snapshot of the `LiveRoster` below.  At the scale a durable or
+  server-backed store exists for, the boxed shape *is* the cost: measured
   over contiguous handles, a `PersistentHashSet<Long>` retains **48–75 bytes per handle**
   (the hash trie's fill varies with cardinality), so **4.5–7.0 GB at 100M** — and
   `rebuild-tms` holds the sentex roster while it walks the premises and the
@@ -35,10 +35,10 @@
   ## The live roster beside it
 
   A store that *answers* a roster also *holds* one, and that one is mutated on every put
-  and every delete.  `LiveRoster` is the same bitmap kept in place for that: the disk
-  store's per-kind live-handle set, where the `PersistentHashSet<Long>` it replaces
-  costs 48–75 bytes a handle — **9.47 GB at 100M records** and the second-largest resident
-  row in the engine (`docs/density.md`).
+  and every delete.  `LiveRoster` is the same bitmap kept in place for that.  The disk
+  store holds four: the per-kind live-handle sets, where the `PersistentHashSet<Long>` they
+  replace cost 48–75 bytes a handle — **9.47 GB at 100M records** (`docs/density.md`) —
+  and the premise set, which was the same boxed set at **4.12 GB**.
 
   **It synchronizes nothing.**  A `Roaring64Bitmap` is mutable and not
   thread-safe, so every call here needs a monitor around it — and the monitor is the

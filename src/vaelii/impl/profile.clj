@@ -212,7 +212,7 @@
   "Tally one `candidate-handles` decision: the pattern sentex it was asked for and the
   access path it chose.  A deref and a `nil?` check when the instrument is off."
   [pat path]
-  (tallying [:goals (shape-of (sx/body pat) (:polarity pat) path)] (fnil inc 0)))
+  (tallying [:goals (shape-of (sx/body pat) (sx/polarity pat) path)] (fnil inc 0)))
 
 (defn record-literal
   "Tally one retrieval decision taken over a bare sentence rather than a pattern sentex —

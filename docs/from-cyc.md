@@ -18,7 +18,7 @@ third column is the one to read.
 | in Cyc | here | what changes |
 |---|---|---|
 | `Mt` | context | a sentex is in exactly one, and reads see up the `genlCx` ancestor set → [contexts.md](contexts.md) |
-| `genlMt` | `genlCx` | cached and recomputed on edge change, not derived by a rule |
+| `genlMt` | `genlCx` | cached and recomputed on edge change, not derived by a rule; a cycle is refused, unlike `genlMt`'s mutually-visible Mts → [contexts.md](contexts.md) |
 | assertion | sentex | a sentence *plus* the context it holds in; the pair is the unit |
 | constant | symbol | the role is read off the spelling, and `assert` refuses one that breaks it |
 | collection | a type, which is a **unary predicate** | `(dog Muffet)`, never `(isa Muffet Dog)` |

@@ -114,7 +114,7 @@
   [level h bindings stored]
   {:level    level
    :handle   h
-   :sentence (:sentence stored)
+   :sentence (sx/sentence-of stored)
    :context  (:context stored)
    :bindings bindings})
 

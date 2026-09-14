@@ -313,6 +313,30 @@
                     "including the fact the stale image had never heard of")))
             (finally (rm-rf! aside))))))))
 
+(deftest a-cleared-store-declines-an-image-of-the-records-it-held
+  ;; `clear!` truncates the logs, so a record of the same byte length refills an old slot
+  ;; exactly, and the store below differs from the one the older image describes in
+  ;; content alone.  The epoch the wipe mints is the part of the stamp that separates the
+  ;; two.
+  (with-snapshot-dir
+    (fn [dir]
+      (let [aside (str dir "-aside")]
+        (try
+          (v/assert (v/open-kb {:records :disk :index :snapshot :dir dir :recover? false})
+                    '(dog SnapMuffet) 'CxUniverse {:strength :monotonic})
+          (backend/close-dir! dir)
+          (copy-tree! (snap/snapshot-root dir) aside)       ; the image of the dog record
+          (let [[kb2 _] (opening dir)]
+            (v/clear! kb2)
+            (v/assert kb2 '(cat SnapTiddle) 'CxUniverse {:strength :monotonic}))
+          (backend/close-dir! dir)
+          (copy-tree! aside (snap/snapshot-root dir))
+          (let [[kb3 rebuilds] (opening dir)]
+            (is (= 1 rebuilds) "the stamp caught it")
+            (is (v/ask? kb3 '(cat SnapTiddle) 'CxUniverse))
+            (is (empty? (v/sentexes-matching kb3 '(dog ?x) 'CxUniverse))))
+          (finally (rm-rf! aside)))))))
+
 ;; ---- every other mismatch class, one at a time --------------------------
 
 (def ^:private mismatches

@@ -203,33 +203,10 @@
         (tax/restore-depths t)
         (is (= before (:scc (rel t :genlCx))))))))
 
-(tu/deftest-kb a-firing-inside-a-loose-batch-lands-on-the-components-representative
-  ;; The same claim end to end, and the reason it is worth making twice: `placement-rep`
-  ;; reads `:scc`, so a component the closing edge did not record is a firing placed on
-  ;; whichever member it happened to see.  Each run gets its own terms — the two are
-  ;; compared by *role*, not by name — so neither can answer off the other's leftovers.
-  (let [run (fn [defer?]
-              (tu/with-terms [markp seenp Thing CxLo CxMid CxHi]
-                (let [body (fn []
-                             (doseq [e [(list 'genlCx CxLo CxMid) (list 'genlCx CxMid CxHi)
-                                        (list 'genlCx CxHi CxLo)]]
-                               (v/assert kb e 'CxUniverse {:strength :monotonic}))
-                             (v/assert kb (list 'implies (list markp '?x) (list seenp '?x))
-                                       CxLo {:direction :forward :strength :monotonic})
-                             (v/assert kb (list markp Thing) CxMid {:strength :monotonic}))]
-                  (if defer? (v/with-deferred-settle kb (body)) (body))
-                  (mapv #(get {CxLo :lo CxMid :mid CxHi :hi} (:context %) (:context %))
-                        (v/sentexes-matching kb (list seenp Thing) '?c)))))]
-    ;; the three contexts see each other, so the component's representative is the one
-    ;; place to stand — `term-min` over the members, and `CxTmpHi…` sorts first
-    (is (= [:hi] (run false)) "eagerly, one claim on the component's representative")
-    (is (= [:hi] (run true))
-        "and a deferred batch that went loose before the closing edge agrees")))
-
 (deftest a-cycle-is-ranked-as-one-component
-  ;; `wff` refuses a cyclic `genl` edge, but the *taxonomy* must hold one anyway: a
-  ;; `genlCx` cycle is admitted, and a rebuild replays whatever is stored either
-  ;; way.  The pass condenses, so it terminates **and** leaves a sound potential —
+  ;; `wff` refuses a cyclic `genl` or `genlCx` edge, but the *taxonomy* must hold one
+  ;; anyway: a recovered or foreign store replays whatever is stored, past the checks.
+  ;; The pass condenses, so it terminates **and** leaves a sound potential —
   ;; the members level with each other, everything else strictly ranked around them —
   ;; and the depth-pruned reads stay exact, which the old raw-graph pass could not
   ;; promise.
@@ -422,8 +399,14 @@
   (tu/with-terms [CxAlpha CxBeta]
     (let [tx    (:taxonomy kb)
           place #(tax/maximal-common-descendant-contexts tx [%])]
-      (v/assert kb (list 'genlCx CxBeta CxAlpha) 'CxUniverse)
-      (v/assert kb (list 'genlCx CxAlpha CxBeta) 'CxUniverse)
+      (v/assert kb (list 'genlCx CxBeta CxAlpha) 'CxUniverse)   ; b sees a
+      ;; a → b closes the cycle, which `wff` refuses at assert; form it the way a belief
+      ;; race does (docs/taxonomy.md) — defeat b → a, assert a → b while it is inactive,
+      ;; then revive b → a, so both stand and the two contexts see each other.
+      (let [d (v/assert kb (list 'not (list 'genlCx CxBeta CxAlpha))
+                        'CxUniverse {:strength :monotonic})]
+        (v/assert kb (list 'genlCx CxAlpha CxBeta) 'CxUniverse) ; a sees b — no active cycle
+        (v/retract! kb d))
       (let [group (place CxBeta)]
         (is (= 1 (count group)) "the cycle is one place to stand")
         (is (= group (place CxAlpha)) "wearing one name")
@@ -435,37 +418,6 @@
           (is (not (loose? tx :genlCx)) "the revival repaired in the settle that made it")
           (is (= group (place CxBeta)) "and the group answers to one name again")
           (is (= group (place CxAlpha))))))))
-
-(tu/deftest-kb a-firing-seeded-by-the-cycle-closing-edge-lands-on-the-representative
-  ;; The assert that closes a `genlCx` cycle chains before it settles.  A firing the
-  ;; closing edge seeds reads `:scc` to place its conclusion, so the component has to be
-  ;; in the map by then — repaired as the edge activates, not at the settle — or the
-  ;; conclusion lands on whichever member the firing happened to see, and the same
-  ;; firing re-derived after the settle lands on the representative.  Three contexts, a
-  ;; chain of two edges, and the third closes the cycle; the rule sits in one member
-  ;; and its antecedent in another, so the closing edge re-joins them.
-  (tu/with-terms [CxRa CxRb CxRc pp qq Zed]
-    (let [tx    (:taxonomy kb)
-          ctxs  #(into #{} (map :context) (v/sentexes-matching kb (list qq '?x) '?c))]
-      (doseq [c [CxRa CxRb CxRc]] (v/assert kb (list 'genlCx c 'CxUniverse) 'CxUniverse))
-      (v/assert kb (list 'genlCx CxRa CxRb) 'CxUniverse)     ; a sees b
-      (v/assert kb (list 'genlCx CxRc CxRa) 'CxUniverse)     ; c sees a, b
-      (v/assert kb (list 'implies (list pp '?x) (list qq '?x)) CxRb {:direction :forward})
-      (let [hf (v/assert kb (list pp Zed) CxRc)]
-        (is (= #{CxRc} (ctxs)) "before the cycle, c is the one context seeing both")
-        (v/assert kb (list 'genlCx CxRb CxRc) 'CxUniverse)   ; b sees c: the cycle closes
-        (is (not (loose? tx :genlCx)) "the closing edge repaired in place")
-        (let [rep (first (tax/maximal-common-descendant-contexts tx [CxRb]))]
-          (is (= 1 (count (distinct (map (:scc (rel tx :genlCx)) [CxRa CxRb CxRc]))))
-              "one component")
-          (is (contains? (ctxs) rep)
-              "the firing the closing edge seeded landed on the representative")
-          (is (not (contains? (ctxs) CxRb))
-              "not on the member whose rule it re-joined")
-          (v/retract! kb hf)
-          (v/assert kb (list pp Zed) CxRc)
-          (is (= #{rep} (ctxs))
-              "and a derivation after the settle lands in the same place"))))))
 
 (tu/deftest-kb recover-rebuilds-a-sound-potential
   ;; `recover` replays every stored edge, which is a bulk load and is deferred like
@@ -481,3 +433,91 @@
       (is (kb-sound? kb))
       (is (= before (into {} (for [t [w_t x_t y_t z_t]] [t (v/genls kb t)])))
           "the closure survives the rebuild"))))
+
+(deftest a-deferred-cycle-close-marks-loose-instead-of-repairing
+  ;; `*defer-cycle-scc?*` is recovery's replay flag: the first cycle-closing edge marks
+  ;; the relation `:loose?`, every edge after it skips the detection walk (the branch is
+  ;; `loose?` either way), and `restore-depths` computes `:scc` once for the whole batch
+  ;; — instead of `activate` repairing the whole relation per cycle-closing edge.  The
+  ;; chain arrives parent-first (each edge's sub is a fresh node), so `local-lift` keeps
+  ;; it sound and never loose until the closing edge, which is the only operation the
+  ;; flag changes.  Two further chords then land while the relation is already loose.
+  ;; The one deferred repair must reach the same condensation the eager per-edge repair
+  ;; builds, whichever path got there.
+  (letfn [(chain! [t]
+            (tax/add-genl t 'h1_t 'h0_t 1)
+            (tax/add-genl t 'h2_t 'h1_t 2)
+            (tax/add-genl t 'h3_t 'h2_t 3))
+          (more! [t]                                    ; two more cycle-closers + a fresh sub
+            (tax/add-genl t 'h0_t 'h2_t 5)              ; chord, back into the component
+            (tax/add-genl t 'h1_t 'h3_t 6)              ; chord, back into the component
+            (tax/add-genl t 'h4_t 'h0_t 7))]            ; below the component, acyclic
+    (let [eager    (tax/create-taxonomy)
+          deferred (tax/create-taxonomy)
+          build!   (fn [t defer?]
+                     (binding [tax/*defer-depths?* true tax/*defer-cycle-scc?* defer?]
+                       (chain! t) (tax/add-genl t 'h0_t 'h3_t 4)))]  ; closes h0→h3→h2→h1→h0
+      (build! eager false)
+      (build! deferred true)
+      (testing "the flag alone decides whether the first cycle-close repairs now or defers"
+        (is (not (loose? eager :genl))        "eager repairs the cycle outright")
+        (is (seq (:scc (rel eager :genl)))    "eager already holds the component")
+        (is (loose? deferred :genl)           "deferred marks loose and waits")
+        (is (empty? (:scc (rel deferred :genl))) "deferred has not computed :scc yet"))
+      (binding [tax/*defer-depths?* true]
+        (binding [tax/*defer-cycle-scc?* false] (more! eager))
+        (binding [tax/*defer-cycle-scc?* true]  (more! deferred)))
+      (is (loose? deferred :genl)
+          "deferred is still loose after two more cycles, having skipped their detection")
+      (tax/restore-depths eager)
+      (tax/restore-depths deferred)
+      (testing "the single deferred repair lands the eager path's condensation"
+        (is (not (loose? deferred :genl)))
+        (is (not (loose? eager :genl)))
+        (is (sound? eager :genl))
+        (is (sound? deferred :genl))
+        (is (= (:scc (rel eager :genl)) (:scc (rel deferred :genl)))
+            "same component, same representative")
+        (is (= (:depth (rel eager :genl)) (:depth (rel deferred :genl)))
+            "same depth potential"))
+      (testing "and the pruned reads answer the cycle the same either way"
+        (doseq [t [eager deferred]]
+          (is (= 1 (count (distinct (map (:scc (rel t :genl)) '[h0_t h1_t h2_t h3_t])))))
+          (is (tax/genl?-global t 'h0_t 'h3_t))
+          (is (tax/genl?-global t 'h3_t 'h0_t) "mutual, answered off :scc")
+          (is (tax/genl?-global t 'h4_t 'h3_t) "the sub below reaches through the component"))))))
+
+(tu/deftest-kb recover-rebuilds-a-cyclic-context-potential
+  ;; The acyclic recover test above never reaches the cyclic branch of `activate`.  A
+  ;; `genlCx` cycle is refused at assert, so it reaches the taxonomy only from a
+  ;; recovered or foreign store; the cycle below is formed the way a belief race does
+  ;; (defeat an edge, assert its reverse, revive the first — docs/taxonomy.md), which
+  ;; leaves all three positive edges stored for `recover` to replay.  Recovery defers
+  ;; the repair through `*defer-cycle-scc?*`, so `restore-depths` is what has to land the
+  ;; component.  The recovered condensation and visibility must match the live build's.
+  (v/assert kb '(genlCx CxCycLo CxCycMid) 'CxUniverse)
+  (v/assert kb '(genlCx CxCycMid CxCycHi) 'CxUniverse)      ; mid sees hi
+  ;; hi → mid closes CxCycMid ⇄ CxCycHi; break mid → hi, assert hi → mid, revive mid → hi
+  (let [d (v/assert kb '(not (genlCx CxCycMid CxCycHi)) 'CxUniverse {:strength :monotonic})]
+    (v/assert kb '(genlCx CxCycHi CxCycMid) 'CxUniverse)    ; hi sees mid — no active cycle
+    (v/retract! kb d))
+  (let [tax    (:taxonomy kb)
+        scc-of #(:scc (rel tax :genlCx))
+        before {:scc    (scc-of)
+                :mid-hi (tax/sees? tax 'CxCycMid 'CxCycHi)
+                :hi-mid (tax/sees? tax 'CxCycHi 'CxCycMid)
+                :lo-hi  (tax/sees? tax 'CxCycLo 'CxCycHi)}]
+    (testing "the live build makes the cycle one mutually-visible component"
+      (is (= 1 (count (distinct (map (scc-of) '[CxCycMid CxCycHi])))))
+      (is (every? some? (map (scc-of) '[CxCycMid CxCycHi])))
+      (is (true? (:mid-hi before)))
+      (is (true? (:hi-mid before))))
+    (v/recover kb)
+    (testing "recover rebuilds the same condensation, sound and not loose"
+      (is (not (loose? tax :genlCx)))
+      (is (sound? tax :genlCx))
+      (is (= (:scc before) (scc-of)) "same component, same representative")
+      (is (= (:mid-hi before) (tax/sees? tax 'CxCycMid 'CxCycHi)))
+      (is (= (:hi-mid before) (tax/sees? tax 'CxCycHi 'CxCycMid)))
+      (is (= (:lo-hi before) (tax/sees? tax 'CxCycLo 'CxCycHi))
+          "reach into the cycle survives the rebuild"))))

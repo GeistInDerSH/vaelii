@@ -28,6 +28,7 @@
             [vaelii.impl.resolution :as res]
             [vaelii.impl.rules :as rules]
             [vaelii.impl.sentex :as sx]
+            [vaelii.impl.settle-phases :as phases]
             [vaelii.impl.solve :as solve]
             [vaelii.impl.special :as special]
             [vaelii.impl.strength :as strength]
@@ -486,7 +487,7 @@
   (let [recs  (:records kb)
         moved (into #{}
                     (comp (keep #(p/get-sentex recs %))
-                          (mapcat #(inherit/moved-predicates kb (:sentence %) pairs)))
+                          (mapcat #(inherit/moved-predicates kb (sx/sentence-of %) pairs)))
                     @region)]
     (-> #{}
         (into @(:preserved-clashes kb))
@@ -706,6 +707,24 @@
               (mapcat #(special/recheck-except kb %)))
         handles))
 
+(defn- released-by-defeat
+  "The watched rules whose re-check condition a defeat of one of `handles` may have
+  released: an `(unknown S)` that holds once `S` is defeated, or an exception that no
+  longer holds.  Returns the rule handles, which the pass re-chains.
+
+  A defeat moves a datum OUT and leaves it stored, so the store and removal chokepoints
+  that call `recheck-on-sentence` never see it.  A firing placed while `S` was absent,
+  then blocked and swept when `S` arrived, left no justification in the blocked set and no
+  refusal record, so neither `released-rules` nor `released-refusals` can find its
+  release.  A re-join of the rule over its extent re-derives it.  The caller passes only
+  the datums this pass defeated that the previous settle had not, so a standing defeat
+  that `clear-defeats!` lifts and the resolution re-applies re-chains nothing."
+  [kb handles]
+  (into #{}
+        (comp (keep #(p/get-sentex (:records kb) %))
+              (mapcat #(special/rules-watching kb (sx/sentence-of %))))
+        handles))
+
 (defn- refresh-after-defeat
   "A defeat inside arbitration flips belief with no arrival for the taxonomy to see,
   and the reconcile otherwise waits for `settle-finish` — so everything the rest of
@@ -728,7 +747,7 @@
   [kb handles]
   (into #{}
         (comp (keep #(p/get-sentex (:records kb) %))
-              (mapcat #(inherit/rejoin-rules kb (:sentence %))))
+              (mapcat #(inherit/rejoin-rules kb (sx/sentence-of %))))
         handles))
 
 (defn- resolve-contradictions
@@ -770,17 +789,18 @@
     (let [active (seq (into #{}
                             (filter #(live-nogood? (:tms kb) %))
                             (concat constraint
-                                    (negation-nogoods kb scan region)
-                                    (preserving-nogoods kb region))))]
+                                    (phases/with-phase :discovery (negation-nogoods kb scan region))
+                                    (phases/with-phase :discovery (preserving-nogoods kb region)))))]
       (if-not active
         {:violated solver-violated :dilemmas [] :rejoin rejoin :region region}
         (let [decisions (map #(decide-nogood kb %) active)
               clears    (into #{} (keep :defeat decisions))
               defeat!   (fn [handles]
-                          (jtms/defeat (:tms kb) handles)
-                          (let [t (jtms/touched (:tms kb))]
-                            (refresh-after-defeat kb t)
-                            (delay t)))]
+                          (phases/with-phase :belief
+                            (jtms/defeat (:tms kb) handles)
+                            (let [t (jtms/touched (:tms kb))]
+                              (refresh-after-defeat kb t)
+                              (delay t))))]
           (if (seq clears)
             (let [region (defeat! clears)]
               (recur solver-violated (into rejoin (preserved-rejoins-for kb clears)) scan region))
@@ -865,7 +885,7 @@
         sides (->> nogood
                    (map (fn [h]
                           (let [s (p/get-sentex recs h)]
-                            {:handle h :sentence (:sentence s) :context (:context s)
+                            {:handle h :sentence (sx/sentence-of s) :context (:context s)
                              :defeat-class (jtms/defeat-class tms h)
                              :justifications (->> (jtms/supports tms h)
                                                   (keep #(p/get-justification recs %))
@@ -1036,8 +1056,9 @@
 
 ;; ---- narrowing the re-check to the firings a trigger can reach ----------
 ;;
-;; The index is keyed by rule, which is right: a rule handle is an antecedent of every
-;; justification it licenses, so nothing per-firing has to be stored.  But *evaluating*
+;; The index is keyed by rule, which is right: the TMS lists every justification a rule
+;; licenses under the rule's node (`jtms/rests-on`), so nothing per-firing has to be
+;; stored.  But *evaluating*
 ;; every firing of a queued rule costs one level-6 query each, so a rule that has fired
 ;; N times paid N queries per relevant fact arrival — quadratic in its firing count,
 ;; and measurably so (docs/exceptions.md, "The cost is in re-checking").
@@ -1265,7 +1286,7 @@
   "The blocked set after re-evaluating the exceptions of the firings the queued
   triggers could have reached.
 
-  The rule handle is an antecedent of every justification it licenses, so
+  The TMS lists every justification a rule licenses under the rule's node, so
   `jtms/dependents` reaches every firing of a rule with no per-firing bookkeeping —
   that structural fact is what lets the re-check index be keyed at *rule* granularity.
   `exception-candidates` then narrows those firings to the ones the triggering
@@ -1605,7 +1626,7 @@
   [kb]
   (comp (keep #(p/get-sentex (:records kb) %))
         (filter #(jtms/in? (:tms kb) (:id %)))
-        (filter #(= :positive (:polarity %)))))
+        (filter #(not (sx/negative? %)))))
 
 (defn- believed-in-ancestors
   "The believed, positive sentexes stored across `contexts` — the shape every ancestor set sweep
@@ -1621,7 +1642,7 @@
   (for [c     (filter symbol? contexts)
         s     (keep #(p/get-sentex (:records kb) %)
                     (reads/as-stored-in-context (:index kb) c))
-        :when (and (jtms/in? (:tms kb) (:id s)) (= :positive (:polarity s)))]
+        :when (and (jtms/in? (:tms kb) (:id s)) (not (sx/negative? s)))]
     s))
 
 (defn- believed-at-arg
@@ -1895,7 +1916,7 @@
           s     (keep #(p/get-sentex (:records kb) %)
                       (reads/as-stored-with-functor (:index kb) t'))
           :when (and (jtms/in? (:tms kb) (:id s))
-                     (= :positive (:polarity s))
+                     (not (sx/negative? s))
                      (= 1 (count (rest (:sentence s))))
                      (symbol? (second (:sentence s))))]
       (second (:sentence s)))))
@@ -1966,7 +1987,7 @@
              (let [sen (:sentence s)]
                (and (sequential? sen) (= 2 (count sen))
                     (contains? closure (first sen))
-                    (= :positive (:polarity s))
+                    (not (sx/negative? s))
                     (jtms/in? (:tms kb) (:id s))))))
          (reads/as-stored-with-arg (:index kb) 1 term))))
 
@@ -1984,7 +2005,7 @@
                           ;; `sequential?` before `count`, as every other reader of an
                           ;; argument-root posting here does it: a sentence that is not a
                           ;; sequence has no arity to compare and `count` throws on it
-                          (if (and (sequential? sen) (= 2 (count sen)) (= :positive (:polarity s))
+                          (if (and (sequential? sen) (= 2 (count sen)) (not (sx/negative? s))
                                    (jtms/in? (:tms kb) (:id s)))
                             (let [seen' (into seen (owner (first sen)))]
                               (if (> (count seen') 1) (reduced seen') seen'))
@@ -2403,7 +2424,7 @@
   (when (symbol? pred)
     (for [s     (keep #(p/get-sentex (:records kb) %)
                       (reads/as-stored-with-functor (:index kb) pred))
-          :when (and (jtms/in? (:tms kb) (:id s)) (= :positive (:polarity s)))]
+          :when (and (jtms/in? (:tms kb) (:id s)) (not (sx/negative? s)))]
       s)))
 
 (defn- predicate-subtree
@@ -2445,6 +2466,82 @@
   [kb pred]
   (mapcat #(predicate-sentexes kb %) (predicate-subtree kb pred)))
 
+(defn- marked-at-final-arg?
+  "Is some `functionalInArg` mark reaching `f` declared at exactly position `k` — the
+  **last** argument of a tuple of that arity?
+
+  What the callers want it for is the determinant that leaves: every argument but the
+  last.  At arity 1 that determinant is *empty*, so any two believed tuples of the
+  predicate are slot-mates automatically — the shape `functional_in_arg_test`'s four
+  cross-context rows use.  Above arity 2 it is *composite*, several positions taken
+  together.  Both are admitted here and for one reason: neither is a single argument
+  root, so the narrow `believed-at-arg` reads `could-clash?`, `partner-contexts` and
+  `constraint-facts-in-ancestors` make cannot find a partner, and the candidate has to reach
+  an extent sweep instead.  Arity 2 is the case that *is* a single root — position 1 is
+  the whole determinant — which is why `partner-contexts` excludes it here and folds it
+  in beside `functional`, whose shape it shares.
+
+  **`n` below the arity is the shape this test does not admit**, and the earlier name for
+  it (`empty-determinant-arity?`) obscured that by calling every admitted case
+  determinant-free, which is true at arity 1 and of nothing above it.
+
+  **Arity 2 is the exception, and it is answered elsewhere.**  A binary tuple's only
+  position below the arity is 1, whose determinant is the single argument 2 — a lone
+  argument root, so `partner-contexts` finds those partners by the same narrow
+  `believed-at-arg` read it uses for position 2, mirrored. That is why this gate excludes
+  arity 2 above rather than admitting it: the case is reached, just not through here.
+
+  Above arity 2 the shape is genuinely unreached. A mark constraining a position that is
+  neither the last nor a lone determinant leaves a composite determinant this gate never
+  asks about, so a cross-context clash of that shape — two blind contexts each holding a
+  candidate tuple, joined by a `genlCx` edge — is still undiscovered at settle time.
+  `checks/functional-clashes` has always handled it correctly (`nm/args` opened at `n`,
+  never assumed binary); it is only the settle-time *candidate discovery* that has not
+  caught up.
+
+  One `functional-in-arg-over` read and a set membership test, past the O(1) gates the
+  three callers already pay."
+  [tax f k]
+  (boolean (some #(= k (second %)) (tax/functional-in-arg-over tax f))))
+
+(defn- constraint-facts-in-ancestors
+  "The believed binary facts of a predicate one of the three tuple marks reaches, stored
+  in the contexts `sub` now sees — the candidates a `genlCx` edge's visibility move
+  can newly put in joint sight.
+
+  The exact parallel of `members-in-ancestors`, which answers the same question for the
+  disjointness pass, and lazy for the same budgeted consumer: a context cycle makes the
+  ancestor set the whole graph, so nothing here may be realized or sorted before its first
+  element comes out.
+
+  Read by both passes an edge triggers: the `:refuse` exposure candidate finder
+  (`constraint-exposure-candidates`) and the `:arbitrate` deciding sweep
+  (`declaration-implicates`), each off the edge's **sub** — the newly-seeing context, whose
+  ancestor set is what a fact stored there gains sight of, exactly as `members-in-ancestors`
+  reads the sub for disjointness."
+  [kb sub]
+  (let [tax (:taxonomy kb)]
+    (for [s     (believed-in-ancestors kb (tax/context-up tax sub))
+          :let  [sen (:sentence s)]
+          :when (and (sequential? sen)
+                     (let [f (nm/functor sen)
+                           k (count (nm/args sen))]
+                       (and (symbol? f)
+                            (or (and (= 2 k) (marks-above? tax f))
+                                (marked-at-final-arg? tax f k)))))]
+      s)))
+
+(defn- separations?
+  "Does the KB separate any two types at all?  Disjointness is spelled three ways —
+  `disjoint`, a disjoint metatype's members, and a `sibling_disjoint` parent's
+  specializations — so a KB declaring none takes all three reads, the `or`
+  short-circuiting only on a hit.  Three set-emptiness reads and no walk, which is what
+  lets every disjointness pass sit behind it."
+  [tax]
+  (boolean (or (seq (tax/disjoint-pairs tax))
+               (seq (tax/disjoint-metatypes tax))
+               (seq (tax/sibling-disjoints tax)))))
+
 (defn- declaration-implicates
   "The stored sentexes a believed declaration in the moved region puts back in
   question.  Lazy, so the budgeted caller realizes only what it takes.
@@ -2452,7 +2549,11 @@
   The type-separating declarations read `declaration-reach`, the same candidate rule
   the exposure pass runs — the two answer one question about one KB, so a pair one of
   them reaches and the other does not would be reported as *visible* by one mechanism
-  and *decided* by the other depending on which route ran.
+  and *decided* by the other depending on which route ran.  A `(genlCx w c)` edge is
+  type-separating for its disjointness memberships, but it also reveals the binary facts
+  of a tuple mark now in joint sight, so its two reaches union here as `genl`'s do — the
+  `constraint-facts-in-ancestors` reach off the edge's sub, the same the exposure pass
+  makes, so neither mechanism reaches a pair the other misses.
 
   `definitional-marks` (`functional`, `asymmetric` and `anti_transitive`) have no type
   reach and a **predicate** reach rather than none: the mark descends (`marks-above?`,
@@ -2490,18 +2591,42 @@
         tax (:taxonomy kb)
         ;; both type-separating shapes end the same way: bound the enumeration, keep the
         ;; terms that could really be convicted, and take their memberships
+        ;; A KB separating no two types can convict no membership, so the enumeration is
+        ;; skipped behind the same O(1) read the exposure pass sits behind.  The walk is
+        ;; linear in the subtree up to the budget, and `genl` is the commonest edge an
+        ;; ontology writes, so a KB with no disjointness must not pay it per edge.
         implicated (fn [{:keys [enumerate keep?]}]
-                     (let [[terms cut?] (take-budgeted left enumerate)]
-                       {:cut?     cut?
-                        :sentexes (mapcat #(membership-sentexes kb %) (filter keep? terms))}))
+                     (if-not (separations? tax)
+                       {:cut? false :sentexes ()}
+                       (let [[terms cut?] (take-budgeted left enumerate)]
+                         {:cut?     cut?
+                          :sentexes (mapcat #(membership-sentexes kb %) (filter keep? terms))})))
         ;; ...and the predicate reach a descending mark has, which is the subtree's facts
         ;; rather than the named predicate's own posting list
         marked (fn [pred]
                  (let [[ss cut?] (take-budgeted left (subtree-facts kb pred))]
-                   {:cut? cut? :sentexes ss}))]
+                   {:cut? cut? :sentexes ss}))
+        ;; ...and the reach a `genlCx` edge has beyond the memberships its type-separating
+        ;; arm gives: the binary facts of a marked predicate now in joint sight,
+        ;; `constraint-facts-in-ancestors` off the edge's sub — the deciding-path parallel
+        ;; of the exposure pass's own `genlCx` reach.  A mark standing in a context a fact
+        ;; could not see convicts nothing until the edge; without this the pair never
+        ;; reaches the candidate set and `:arbitrate` leaves it unweighed, so the same KB
+        ;; would believe differently by whether the mark, the facts, or the edge arrived
+        ;; last (`exposure_test`'s co-located-facts rows).
+        revealed (fn [sub]
+                   (let [[ss cut?] (take-budgeted left (constraint-facts-in-ancestors kb sub))]
+                     {:cut? cut? :sentexes ss}))]
     (case (clash-declaration-kind f)
       :type-separating
-      (implicated (declaration-reach kb sen))
+      ;; `genlCx` is type-separating for its disjointness reach, but an edge also reveals
+      ;; the tuple-marked facts beneath it — the two reaches union, spending one budget.
+      (let [sep (implicated (declaration-reach kb sen))]
+        (if (= 'genlCx f)
+          (let [rev (revealed a)]
+            {:cut?     (or (:cut? sep) (:cut? rev))
+             :sentexes (concat (:sentexes sep) (:sentexes rev))})
+          sep))
 
       :predicate-marked
       (marked a)
@@ -2597,16 +2722,16 @@
   is the route `place-conclusion` hands here: a conclusion that clashes is admitted and
   arbitrated rather than dropped, so the pair has to be found in the same settle.
 
-  **The retroactive sweeps only under this KB's constraint policy**
-  (`checks/arbitrating?` — `:arbitrate`, or the process default).  A *declaration*
+  **Plus the retroactive sweeps, under either constraint policy.**  A *declaration*
   arriving — a separation, a `genl` edge closing one, a predicate property — puts
   content stored long before it back in question, and content that was admitted by an
-  `assert` the declaration had not yet arrived to refuse.  Arbitrating those is the
-  other half of the same policy: under `:refuse`, a clash nobody could see when they
-  wrote it stays the exposure pass's business (a report naming the contexts it is
-  visible from, `expose-clashes!`), and only content this settle *derived* is
-  arbitrated.  Under `:arbitrate`, every route agrees and a violating set lands on the
-  same answer in every arrival order.
+  `assert` the declaration had not yet arrived to refuse.  A recover decides exactly
+  those pairs from its region, which is every stored sentex, whatever the policy; a live
+  settle that left them to the exposure pass would believe one thing and the same
+  records after a restart another.  The policy (`checks/arbitrating?`) decides whether a
+  *writer* is told no, and which vantages `clash-askers` asks from: a clash no member's
+  own context can see stays the exposure pass's report under `:refuse`, live and after a
+  restart alike.
 
   **Plus both members of every pair already known to clash.**  `contradictions` is
   recomputed from scratch each settle, and the region is only what *this* settle moved —
@@ -2637,15 +2762,9 @@
   proxy is the wrong thing to hang belief on."
   [kb touched revisit]
   (let [believed  (believed-xf kb)
-        sweeping? (checks/arbitrating? kb)
         ;; `revisit` ahead of `touched` and each half in content order: the sweep below
         ;; is budgeted, so which triggers it reaches must not depend on the handle order
         ;; either set came back in (`content-order`).
-        ;;
-        ;; **Ordered only when something reads the order.**  The sweep is the only reader
-        ;; and it runs under `arbitrating?`; the other consumer is `(set moved)` on the
-        ;; way out, which a sort cannot move.  So a `:refuse` KB — the default — sorted
-        ;; the region twice per settle to feed a pass that was never going to run.
         ;;
         ;; The two halves **overlap**, and the half a handle is in decides nothing but its
         ;; place in the order: a member of a known clash pair that this settle also moved
@@ -2654,37 +2773,35 @@
         ;; pay for its reach twice, and could be filed as cut short on the second pass over
         ;; content the first already swept.  `revisit` is a handle set, so the drop is a
         ;; membership test apiece.
-        ordered (if sweeping? content-order identity)
-        moved (into (vec (ordered (into [] believed revisit)))
-                    (ordered (into [] believed (remove revisit touched))))
+        moved (into (vec (content-order (into [] believed revisit)))
+                    (content-order (into [] believed (remove revisit touched))))
         left  (volatile! (long *exposure-instance-budget*))
-        swept (when sweeping?
-                (mapcat (fn [s]
-                          (let [sen (:sentence s)]
-                            (when (and (sequential? sen)
-                                       (or (contains? clash-declaration-functors (nm/functor sen))
-                                           (metatype-member? kb sen)))
-                              ;; A trigger reached after the budget is spent went unswept
-                              ;; as surely as one cut off mid-reach, so it is asked the
-                              ;; same question rather than filed on the arithmetic — which
-                              ;; is what `take-budgeted`'s probe past the cap buys, and
-                              ;; why a declaration whose reach is empty is not counted
-                              ;; here as one this settle failed to finish.
-                              (let [{:keys [cut? sentexes]}
-                                    (declaration-implicates kb sen left)]
-                                (when cut? (note-arbitration-cut! sen))
-                                sentexes))))
-                        moved))
+        swept (mapcat (fn [s]
+                        (let [sen (:sentence s)]
+                          (when (and (sequential? sen)
+                                     (or (contains? clash-declaration-functors (nm/functor sen))
+                                         (metatype-member? kb sen)))
+                            ;; A trigger reached after the budget is spent went unswept
+                            ;; as surely as one cut off mid-reach, so it is asked the
+                            ;; same question rather than filed on the arithmetic — which
+                            ;; is what `take-budgeted`'s probe past the cap buys, and
+                            ;; why a declaration whose reach is empty is not counted
+                            ;; here as one this settle failed to finish.
+                            (let [{:keys [cut? sentexes]}
+                                  (declaration-implicates kb sen left)]
+                              (when cut? (note-arbitration-cut! sen))
+                              sentexes))))
+                      moved)
         ;; ...and the memberships a **retracted** exception re-armed — the one trigger the
         ;; region does not carry, since the retracted declaration is gone from the store
         ;; and the pair it spared ab initio was never a clash to be revisited.  Budgeted off
         ;; the same volatile as the sweep above, so a retract and a declaration reaching the
-        ;; same settle share one bound.  `sweeping?` for the reason the sweep is: under
-        ;; `:refuse` the exposure pass answers this instead.
-        rearmed (when sweeping?
-                  (mapcat (fn [{:keys [terms]}]
-                            (mapcat #(membership-sentexes kb %) terms))
-                          (rearm-reaches kb @(:sib-exc-dirty kb) left note-arbitration-cut!)))]
+        ;; same settle share one bound.  Run under either policy for the sweep's reason: a
+        ;; recover's region holds the re-armed pair, so a KB that skipped it here would
+        ;; decide the pair only after a restart.
+        rearmed (mapcat (fn [{:keys [terms]}]
+                          (mapcat #(membership-sentexes kb %) terms))
+                        (rearm-reaches kb @(:sib-exc-dirty kb) left note-arbitration-cut!))]
     (-> (set moved) (into swept) (into rearmed))))
 
 (def ^:dynamic *incremental-clashes*
@@ -2709,7 +2826,7 @@
   `*incremental-clashes*` false substitutes for the region."
   [kb]
   (into [] (comp (keep #(p/get-sentex (:records kb) %))
-                 (filter #(= :positive (:polarity %))))
+                 (filter #(not (sx/negative? %))))
         (jtms/in-datums (:tms kb))))
 
 (defn- clash-vocabulary
@@ -2717,8 +2834,17 @@
   closure**: the separations, the metatypes whose members separate each other and *which
   types those members are*, the sibling-disjoint parents, the sibling-disjointness
   exceptions, one predicate-property set per `definitional-marks` mark with
-  `functionalInArg`'s beside them, and the generation of the context closure a
-  separation is read through.
+  `functionalInArg`'s `pred -> #{positions}` table beside them, and the generation of the
+  context closure a separation is read through.
+
+  The `functionalInArg` half is the **table**, not the predicate roster, and the
+  positions are why: a predicate may carry two positions and each is an independent
+  constraint (`tax/functional-in-arg-over`), so retracting `(functionalInArg P 1)` while
+  `(functionalInArg P 2)` stands leaves `P` in the roster while the pairing position 1
+  convicted through is gone.  A roster keyed on the predicate alone would not move, and a
+  pair convicted only through the retracted position would carry forward stale — the
+  membership map beside it is here for the same reason a metatype member leaving must
+  move the value.
 
   The mark half is read **through the roster**, so a mark added there is fingerprinted
   by arriving rather than by somebody remembering this vector: one left out reads as
@@ -2765,7 +2891,7 @@
    (tax/sibling-disjoints tax)
    (tax/sib-exceptions tax)
    (mapv #(tax/props tax (second %)) definitional-marks)
-   (tax/functional-in-arg-predicates tax)
+   (tax/functional-in-arg-table tax)
    (tax/relation-gen tax :genlCx)])
 
 (defn- genl-view-keys
@@ -2824,44 +2950,6 @@
   [tax [t ctx]]
   (let [all (tax/genls-global tax t)]
     (if (= all (tax/genls tax t ctx)) all scoped-reading)))
-
-(defn- marked-at-final-arg?
-  "Is some `functionalInArg` mark reaching `f` declared at exactly position `k` — the
-  **last** argument of a tuple of that arity?
-
-  What the callers want it for is the determinant that leaves: every argument but the
-  last.  At arity 1 that determinant is *empty*, so any two believed tuples of the
-  predicate are slot-mates automatically — the shape `functional_in_arg_test`'s four
-  cross-context rows use.  Above arity 2 it is *composite*, several positions taken
-  together.  Both are admitted here and for one reason: neither is a single argument
-  root, so the narrow `believed-at-arg` reads `could-clash?`, `partner-contexts` and
-  `constraint-facts-in-ancestors` make cannot find a partner, and the candidate has to reach
-  an extent sweep instead.  Arity 2 is the case that *is* a single root — position 1 is
-  the whole determinant — which is why `partner-contexts` excludes it here and folds it
-  in beside `functional`, whose shape it shares.
-
-  **`n` below the arity is the shape this test does not admit**, and the earlier name for
-  it (`empty-determinant-arity?`) obscured that by calling every admitted case
-  determinant-free, which is true at arity 1 and of nothing above it.
-
-  **Arity 2 is the exception, and it is answered elsewhere.**  A binary tuple's only
-  position below the arity is 1, whose determinant is the single argument 2 — a lone
-  argument root, so `partner-contexts` finds those partners by the same narrow
-  `believed-at-arg` read it uses for position 2, mirrored. That is why this gate excludes
-  arity 2 above rather than admitting it: the case is reached, just not through here.
-
-  Above arity 2 the shape is genuinely unreached. A mark constraining a position that is
-  neither the last nor a lone determinant leaves a composite determinant this gate never
-  asks about, so a cross-context clash of that shape — two blind contexts each holding a
-  candidate tuple, joined by a `genlCx` edge — is still undiscovered at settle time.
-  `checks/functional-clashes` has always handled it correctly (`nm/args` opened at `n`,
-  never assumed binary); it is only the settle-time *candidate discovery* that has not
-  caught up.
-
-  One `functional-in-arg-over` read and a set membership test, past the O(1) gates the
-  three callers already pay."
-  [tax f k]
-  (boolean (some #(= k (second %)) (tax/functional-in-arg-over tax f))))
 
 (defn- could-clash?
   "Could this believed sentex be one half of a definitional clash?  A cheap,
@@ -3356,17 +3444,6 @@
                                     views fresh))}))
       ngs)))
 
-(defn- separations?
-  "Does the KB separate any two types at all?  Disjointness is spelled three ways —
-  `disjoint`, a disjoint metatype's members, and a `sibling_disjoint` parent's
-  specializations — so a KB declaring none takes all three reads, the `or`
-  short-circuiting only on a hit.  Three set-emptiness reads and no walk, which is what
-  lets every disjointness pass sit behind it."
-  [tax]
-  (boolean (or (seq (tax/disjoint-pairs tax))
-               (seq (tax/disjoint-metatypes tax))
-               (seq (tax/sibling-disjoints tax)))))
-
 (defn- tuple-marks?
   "Does any predicate carry a `definitional-marks` mark, or the `functionalInArg`
   generalization read beside them?  `separations?`'s other half, and the same reading: a
@@ -3382,18 +3459,6 @@
   [tax]
   (boolean (or (some #(seq (tax/props tax %)) definitional-mark-keywords)
                (seq (tax/functional-in-arg-predicates tax)))))
-
-(def ^:dynamic *skip-constraint-nogoods*
-  "When true, `constraint-nogoods` takes the same branch a KB declaring no
-  disjointness/functional/asymmetric feature takes — it derives no definitional-clash
-  nogoods and resets `(:clashes kb)` to empty.  Sound to skip **only when the clash
-  scan is belief-neutral**, i.e. every standing clash is a `:dilemma`/`:hard` tie that
-  disbelieves neither side (`decide-nogood`): then the scan produces no defeat and
-  omitting it changes no belief, only the recorded dilemmas a later `contradictions`
-  read or solve would report.  A KB with a strength-differentiated clash-loser must
-  NOT set this — the loser would be wrongly believed.  For the `meta.edn`-gated warm
-  reload, whose stamp certifies `clash-losers = 0` for the fingerprinted records."
-  false)
 
 (defn- constraint-nogoods
   "`clash-nogoods`, behind the O(1) gate that makes it free for a KB declaring none of
@@ -3416,8 +3481,7 @@
   `region` is the pass's `touched` as a delay, forced only past the gate."
   [kb region]
   (let [tax (:taxonomy kb)]
-    (if (or *skip-constraint-nogoods*
-            (not (or (separations? tax) (tuple-marks? tax))))
+    (if (not (or (separations? tax) (tuple-marks? tax)))
       ;; Nothing separates anything and no predicate carries one of the three tuple
       ;; marks, so no set of sentexes can clash — which makes this the one place the whole
       ;; candidate set can be dropped rather than re-examined.  It has to be dropped
@@ -3595,66 +3659,37 @@
 ;; ---- the other kinds, where the writer could not see the clash -----------
 ;;
 ;; The pass above answers `disjoint` and only `disjoint`.  The three tuple marks have the
-;; same two holes and this is their reporting path.  **Across a visibility edge**: the
-;; assert entry point is scoped to the writer's own ancestor set, so it sees one half and refuses
+;; same hole and this is their reporting path: **across a visibility edge**.  The assert
+;; entry point is scoped to the writer's own ancestor set, so it sees one half and refuses
 ;; nothing, and under `:refuse` `clash-askers` withholds the vantages that would see the
-;; pair whole — a `functional` slot filled either side of a `genlCx` edge, or an
-;; `asymmetric` claim written across one, is believed and unmentioned under the strictest
-;; policy, which is the one chosen precisely to let nothing through.  **And behind a late
-;; mark**: `(asymmetric P)` arriving after `(P a b)` and `(P b a)` convicts a pair whose
-;; halves the entry point admitted one at a time, because at neither write was there a mark to
-;; read.
+;; pair whole — a `functional` slot filled in two contexts only a third sees together is
+;; believed on both sides, and named here.  A late mark is the other shape, and it is not
+;; this pass's: `(asymmetric P)` arriving after `(P a b)` and `(P b a)` puts back in
+;; question a pair its members' own context sees, and `clash-candidates` decides it.
 ;;
-;; **The late mark is exposed, not refused and not arbitrated**, and the reason is that
-;; `(disjoint A B)` arriving over an already-clashing pair is exposed: `exposure-candidates`
-;; reads `declaration-reach` for exactly this, and files an entry naming the contexts the
-;; clash is visible from while both memberships stay believed.  The KB owes the same
-;; answer to "the declaration came last" whichever declaration it is, so the choice is
-;; made once, there, and followed here.
-;;
-;; The two rejected readings, and why.  **Refusing** the declaration would put the
-;; vocabulary at the mercy of the extent: one wrong fact written a week ago would turn
+;; **A late mark is decided, not refused and not reported**, and `(disjoint A B)` arriving
+;; over an already-clashing pair is decided the same way: `clash-candidates` sweeps
+;; `declaration-implicates` under either policy, mints the nogood, and lets the JTMS
+;; defeat the weaker side or report the dilemma.  A recover decides the same pair from
+;; its region, so this is what keeps a live KB and the same records after a restart in
+;; agreement.  **Refusing** the declaration is the reading rejected: it would put the
+;; vocabulary at the mercy of the extent — one wrong fact written a week ago would turn
 ;; away the sentence that says what the predicate *means*, and every later use of `P`
-;; would be unconstrained — the failure recorded above `checks/arbitrable-kinds` for
-;; arity, one relation over.  **Arbitrating** it is the right answer and is already
-;; implemented, on the other side of the policy: `clash-candidates` sweeps the same
-;; `subtree-facts` under `:arbitrate`, mints the nogood, and lets the JTMS defeat the
-;; weaker side.  What `:refuse` means is that a writer is told no and that a declaration
-;; does not move belief it was not asked to move, so doing it here as well would make the
-;; policy name nothing.  Between the two, the KB says what it found.
+;; would be unconstrained, the failure recorded above `checks/arbitrable-kinds` for
+;; arity, one relation over.
 ;;
-;; So: **reported, never decided**, exactly as the disjointness entry is.  The ledger says
-;; a pair is visible from somewhere, `contradictions` stays the answer to what was
-;; *arbitrated*, and belief is untouched.  A pair this settle did arbitrate is excluded on
-;; the same grounds `exposed-clashes-for-term` excludes one — decided is not exposed.
-;; What is order-independent is therefore that the clash is *accounted for* — refused at
-;; the entry point, weighed into `contradictions`, or named here — and never that every arrival
-;; order picks the same account, which is a thing only the policy decides.
+;; What this pass reports is the rest: a pair whose halves no member's own context sees
+;; together, which under `:refuse` `clash-askers` asks from no vantage and so decides
+;; neither live nor after a restart.  The ledger says such a pair is visible from
+;; somewhere, `contradictions` stays the answer to what was *arbitrated*, and a pair this
+;; settle did arbitrate is excluded on the same grounds `exposed-clashes-for-term`
+;; excludes one — decided is not exposed.  What is order-independent is that the clash is
+;; *accounted for* — refused at the entry point, weighed into `contradictions`, left
+;; standing in `conflicts`, or named here — and that belief is the same after a restart.
 ;;
 ;; **Under `:arbitrate` none of it runs**, and there it would be wrong to: the vantages
-;; are asked there and the declaration's sweep runs there, so the pair is weighed rather
-;; than reported, and reporting it here as well would have two mechanisms claim one clash.
-
-(defn- constraint-facts-in-ancestors
-  "The believed binary facts of a predicate one of the three tuple marks reaches, stored
-  in the contexts `sub` now sees — the candidates a `genlCx` edge's visibility move
-  can newly put in joint sight.
-
-  The exact parallel of `members-in-ancestors`, which answers the same question for the
-  disjointness pass, and lazy for the same budgeted consumer: a context cycle makes the
-  ancestor set the whole graph, so nothing here may be realized or sorted before its first
-  element comes out."
-  [kb sub]
-  (let [tax (:taxonomy kb)]
-    (for [s     (believed-in-ancestors kb (tax/context-up tax sub))
-          :let  [sen (:sentence s)]
-          :when (and (sequential? sen)
-                     (let [f (nm/functor sen)
-                           k (count (nm/args sen))]
-                       (and (symbol? f)
-                            (or (and (= 2 k) (marks-above? tax f))
-                                (marked-at-final-arg? tax f k)))))]
-      s)))
+;; are asked there, so the pair is weighed rather than reported, and reporting it here as
+;; well would have two mechanisms claim one clash.
 
 (def ^:private trigger-functor-kind
   "Functor → which arity check `constraint-exposure-candidates`' `trigger?` runs, or
@@ -3779,16 +3814,21 @@
                         (mapcat
                          (fn [e]
                            (let [sen   (:sentence e)
-                                 [x y] (nm/args sen)
+                                 [x]   (nm/args sen)
                                  ;; each trigger reads its own end: the ancestor set the newly
                                  ;; seeing context reaches, or the subtree the mark
                                  ;; reaches — newly descended to under a `genl` edge,
                                  ;; newly declared over under the mark's own sentence.
                                  ;; A `genl` under nothing marked enumerates nothing and
                                  ;; spends nothing; a mark is above its own predicate, so
-                                 ;; the same guard passes it through.
+                                 ;; the same guard passes it through.  The newly seeing
+                                 ;; context of a `(genlCx w c)` edge is `w`, its first
+                                 ;; argument — the ancestor set `w` now reaches is what a
+                                 ;; fact stored in `w` gains sight of, the parallel of the
+                                 ;; disjointness pass reading `members-in-ancestors` off the
+                                 ;; edge's sub (`declaration-reach`'s `genlCx` arm).
                                  ends  (if (= 'genlCx (nm/functor sen))
-                                         (constraint-facts-in-ancestors kb y)
+                                         (constraint-facts-in-ancestors kb x)
                                          (when (marks-above? tax x)
                                            (subtree-facts kb x)))
                                  [taken cut?] (take-budgeted left ends)]
@@ -3958,8 +3998,9 @@
 
 (defn- expose-constraint-clashes!
   "File the `functional`, `asymmetric` and `anti-transitive` clashes the settle's moved
-  region holds — across a visibility edge, or beneath a mark the region carried in after
-  the facts it convicts.  `:refuse` only, and behind an O(1) gate on the declared
+  region holds across a visibility edge, where no member's own context sees the pair
+  whole; a pair beneath a late mark is decided by `clash-candidates` instead.  `:refuse`
+  only, and behind an O(1) gate on the declared
   vocabulary — a KB that declares none of the three marks can form none of the clashes,
   and pays three `seq`s.  Adding the mark's own sentence as a trigger does not widen that
   gate: a `(functional P)` in the region *is* a declared mark, so a KB the gate turns the
@@ -4552,6 +4593,10 @@
         extra-in (volatile! #{})     ; ...of which these were believed until this settle
         note!  (fn [m] (vswap! extra into (keys m)))
         before (doto (jtms/superseded (:tms kb)) note!)]
+    ;; Record the relabelled region's size for `settle-phases`, guarded so the read forces
+    ;; the region delay only on a timing run — off one, this is a `nil?` check and no
+    ;; extra `jtms/touched` (which `settle_region_cost_test` counts at `passes + 1`).
+    (when (phases/profiling?) (phases/note-region! (count @region)))
     (when belief-moved?
       (special/reconcile-belief-change kb @region)
       ;; ...and repair again, because the reconcile itself can surrender the potential:
@@ -4681,6 +4726,18 @@
                       :arbitrated (count arbitrated)}})
   violated)
 
+(defn- finish-settle
+  "Close one settle for `settle-phases`: note the pass count, run `settle-finish` inside
+  the `:finish` span, and file this settle's record.  Every `settle*` return runs through
+  here, which is why `settle*` owes no `try` — the record is filed on the one exit every
+  path takes.  Off a timing run this is `settle-finish` and three `nil?` checks."
+  [kb passes moved violated dilemmas belief-moved? arbitrated]
+  (phases/note-passes! passes)
+  (let [r (phases/with-phase :finish
+            (settle-finish kb passes moved violated dilemmas belief-moved? arbitrated))]
+    (phases/end-settle!)
+    r))
+
 (defn- settle*
   "Relabel the TMS, resolve soft contradictions, and re-evaluate the `exceptWhen`
   exceptions the triggers queued — to a joint fixpoint.  Records the unsatisfiable
@@ -4700,6 +4757,11 @@
   **nil**, so nothing is collected rather than collected and dropped
   (`report-arbitration-cut!` says why that distinction is worth a `when-not`)."
   [kb]
+  ;; One settle is one record for `settle-phases` (off by default): `begin-settle!` charges
+  ;; the pre-settle interval to `:outside` and starts this settle's per-centre tally;
+  ;; the `finish-settle` at each return point below charges `:finish`, notes the region
+  ;; and files the record.  Every exit runs through `settle-finish`, so no `try` is owed.
+  (phases/begin-settle!)
   ;; A supporter's label can flip three ways in a settle: revival (`clear-defeats!`
   ;; lifting a node this run defeated last run — so a non-empty defeated set *before*
   ;; the clear counts), a fresh defeat, and a block change (a moved pass).  Snapshot
@@ -4712,7 +4774,7 @@
           moved? (fn [moved] (or defeated-before?
                                  (boolean (seq (jtms/defeated (:tms kb))))
                                  (pos? moved)))]
-      (jtms/clear-defeats! (:tms kb))
+      (phases/with-phase :belief (jtms/clear-defeats! (:tms kb)))
       ;; ...and reconcile the belief-derived caches with what that revived, **before**
       ;; anything asks them a question.  `clear-defeats!` lifts a defeat, so a `genl` or
       ;; `genlCx` edge defeated last settle is believed again as of this line — but
@@ -4736,25 +4798,28 @@
       ;; nothing.  What a pass relabels after that (blocking, sweeping, re-chaining) is
       ;; the next pass's read.
       (let [region        (delay (jtms/touched (:tms kb)))
-            revival-flips (when defeated-before?
-                            (special/reconcile-belief-change kb @region)
-                            (tax/restore-depths (:taxonomy kb))
-                            ;; ...and an except among the revived is a visibility flip:
-                            ;; what it hid is seeable again, and only this settle knows
-                            ;; the defeat was lifted
-                            (recheck-flipped-excepts kb defeated-before))]
+            revival-flips (phases/with-phase :belief
+                            (when defeated-before?
+                              (special/reconcile-belief-change kb @region)
+                              (tax/restore-depths (:taxonomy kb))
+                              ;; ...and an except among the revived is a visibility flip:
+                              ;; what it hid is seeable again, and only this settle knows
+                              ;; the defeat was lifted
+                              (recheck-flipped-excepts kb defeated-before)))]
         (loop [pass 1, moved 0, seen #{}, flips (or revival-flips #{}), reseeded #{}, region region]
           ;; The definitional clashes are re-derived **per pass**, not per defeat round: a
           ;; pass can re-chain a released rule and put new content in the region, where a
           ;; defeat round only ever withdraws belief and so can retire a pair but never
           ;; make one.  `resolve-contradictions` filters the set to what is still believed
           ;; before each of its own rounds.
-          (let [ngs    (constraint-nogoods kb region)
+          (let [ngs    (phases/with-phase :discovery (constraint-nogoods kb region))
                 ;; accumulated across passes, because the exposure pass at the end has to
                 ;; know about every pair this settle decided, not only the last pass's
                 arbitrated (into seen (map :nogood) ngs)
                 ex-before  (believed-excepts kb)
-                {:keys [violated dilemmas rejoin region]} (resolve-contradictions kb ngs region)
+                defeated-pre (set (jtms/defeated (:tms kb)))
+                {:keys [violated dilemmas rejoin region]}
+                (phases/with-phase :resolution (resolve-contradictions kb ngs region))
                 ;; a resolution that defeated (or revived) a visibility except flipped
                 ;; what its ancestor set can see — queue the same re-check its arrival or
                 ;; departure queues, and carry the marked rules to the re-chain, since a
@@ -4764,6 +4829,13 @@
                               kb (let [ex-after (believed-excepts kb)]
                                    (concat (set/difference ex-before ex-after)
                                            (set/difference ex-after ex-before)))))
+                ;; ...and a datum this resolution newly defeated may have released a
+                ;; watched rule's `unknown` or exception, whose swept firing no instrument
+                ;; below can find (`released-by-defeat`)
+                flips  (into flips
+                             (released-by-defeat
+                              kb (remove (into defeated-pre defeated-before)
+                                         (jtms/defeated (:tms kb)))))
                 queued (drain-recheck! kb)
                 ;; A context-visibility transition carries `:all-rejoin` because there is no
                 ;; arriving sentence narrow enough to identify the one firing it may
@@ -4779,7 +4851,7 @@
                 ;; being seeded once per pass is `reseeded`, not the window.
                 revived (revived-seeds kb reseeded region)]
             (if (and (empty? queued) (empty? revived) (empty? rejoin))
-              (settle-finish kb pass moved violated dilemmas (moved? moved) arbitrated)
+              (finish-settle kb pass moved violated dilemmas (moved? moved) arbitrated)
               (let [was  (jtms/blocked (:tms kb))
                     new  (exception-blocked-set kb queued)
                     ;; a rule an arrival can *release* is owed a re-join whether or not
@@ -4794,7 +4866,7 @@
                 (if (and (= new was) (empty? forced) (empty? aggs)
                          (empty? free) (empty? over) (empty? flips)
                          (empty? revived) (empty? rejoin))
-                  (settle-finish kb pass moved violated dilemmas (moved? moved) arbitrated)   ; unproductive pass: converged
+                  (finish-settle kb pass moved violated dilemmas (moved? moved) arbitrated)   ; unproductive pass: converged
                   ;; read before the sweep, which deletes justifications
                   (let [released (released-rules kb was new)]
                     (jtms/set-blocked (:tms kb) new)
@@ -4831,7 +4903,7 @@
                                        :msg  (str "exception re-check did not converge in "
                                                   max-settle-passes " passes; giving up")
                                        :data {:passes pass :blocked (count new)}})
-                          (settle-finish kb pass (inc moved) violated dilemmas (moved? (inc moved)) arbitrated)))))))))))))
+                          (finish-settle kb pass (inc moved) violated dilemmas (moved? (inc moved)) arbitrated)))))))))))))
 
 (def ^:private max-unmerge-rounds
   "How many times `settle` re-seeds an un-merge and settles again before it gives up and

@@ -175,10 +175,12 @@ lein bench-profile corpus <dir> [profile]     a converted corpus (:cyc-corpus)
 A corpus run wants a heap, and the `:bench` profile pins `-Xmx6g`. An environment
 `JVM_OPTS` is placed *before* the project's own options and loses to it silently, so the
 vector is edited on the way past instead — `with-profile` first, `update-in` second,
-which is the order `scripts/run-bench-caches.sh` documents:
+which is the order `scripts/run-bench-caches.sh` documents. The corpus arm reads
+`:cyc-corpus`, so link the reader first (`scripts/link-checkouts.sh`):
 
 ```
-lein with-profile +bench,+with-foreign update-in :jvm-opts conj '"-Xmx32g"' -- \
+scripts/link-checkouts.sh
+lein with-profile +bench update-in :jvm-opts conj '"-Xmx32g"' -- \
   run -m vaelii.bench.profile corpus <dir>
 ```
 

@@ -24,27 +24,29 @@
 (defn- flatten-key [k]
   (filter (complement sequential?) (tree-seq sequential? seq k)))
 
-;; ---- the struct stores polarity / antecedent / consequent ---------------
+;; ---- the struct stores one head `not` / antecedent / consequent ---------
 
 (tu/deftest-kb connectives-canonicalize-into-the-record
-  (testing "a negation decomposes into polarity :negative over the positive body"
+  (testing "a negation keeps one `not` at the head over the positive body"
     (let [s (sx/sentex '(not (flies Tweety)) 'CxA)]
-      (is (= :negative (:polarity s)))
+      (is (sx/negative? s))
       (is (= '(flies Tweety) (sx/body s)))
       (is (nil? (:antecedent s)))))
   (testing "double negation is eliminated"
     (let [s (sx/sentex '(not (not (flies Tweety))) 'CxA)]
-      (is (= :positive (:polarity s)))
+      (is (not (sx/negative? s)))
       (is (= '(flies Tweety) (:sentence s)))))
   (testing "a rule decomposes into antecedent (a vector) and consequent, canonically named"
     (let [s (sx/sentex '(implies (and (parentOf ?x ?y) (parentOf ?y ?z)) (grandparentOf ?x ?z)) 'CxA)]
       (is (= '[(parentOf ?var0 ?var1) (parentOf ?var1 ?var2)] (:antecedent s)))
       (is (= '(grandparentOf ?var0 ?var2) (:consequent s)))
-      (is (= :positive (:polarity s)))
+      (is (not (sx/negative? s)))
       (testing "and the varmap gets back to the author's names"
         (is (= '{?var0 ?x ?var1 ?y ?var2 ?z} (:varmap s)))
         (is (= '(implies (and (parentOf ?x ?y) (parentOf ?y ?z)) (grandparentOf ?x ?z))
-               (sx/originalize (:sentence s) (:varmap s)))))))
+               (sx/originalize (sx/sentence-of s) (:varmap s)))))
+      (testing "and the record holds no sentence of its own"
+        (is (not (contains? s :sentence))))))
   (testing "the trie key contains none of not / implies / and"
     (let [k (sx/path (sx/sentex '(implies (and (a ?x)) (b ?x)) 'CxA))]
       (is (not (some '#{implies and not} (flatten-key k)))))))
@@ -366,7 +368,7 @@
     (let [s (sx/sentex '(implies (and (p ?who ?whom)) (q ?whom ?who)) 'CxA)]
       (is (= '{?var0 ?who ?var1 ?whom} (:varmap s)))
       (is (= '(implies (p ?who ?whom) (q ?whom ?who))
-             (sx/originalize (:sentence s) (:varmap s))))))
+             (sx/originalize (sx/sentence-of s) (:varmap s))))))
   (testing "a fact carries no varmap — canonical variables are a rule concern"
     (is (nil? (:varmap (sx/sentex '(dog Muffet) 'CxA))))))
 
@@ -441,13 +443,13 @@
 (tu/deftest-kb canonicalization-is-idempotent
   (testing "canonicalizing an already-canonical rule is a no-op"
     (let [a (sx/sentex '(implies (and (p ?x ?y) (q ?y ?z)) (r ?x ?z)) 'CxA)
-          b (sx/sentex (:sentence a) 'CxA)]
-      (is (= (:sentence a) (:sentence b)))
+          b (sx/sentex (sx/sentence-of a) 'CxA)]
+      (is (= (sx/sentence-of a) (sx/sentence-of b)))
       (is (= (:antecedent a) (:antecedent b)))
       (is (= (:consequent a) (:consequent b)))))
   (testing "and the trie path is stable across the round trip"
     (let [a (sx/sentex '(implies (and (foo ?a ?b) (bar ?b)) (baz ?a)) 'CxA)]
-      (is (= (sx/path a) (sx/path (sx/sentex (:sentence a) 'CxA)))))))
+      (is (= (sx/path a) (sx/path (sx/sentex (sx/sentence-of a) 'CxA)))))))
 
 (tu/deftest-kb a-symmetric-fact-answers-from-either-direction
   ;; only fully-ground literals are stored sorted; a *pattern* keeps its order and
@@ -492,6 +494,26 @@
         (testing "and asserting the mirror image resolves to it rather than duplicating"
           (is (= h (v/assert kb (list sib y x) 'CxU)))
           (is (= 1 (count (v/sentexes-matching kb (list sib '?p '?q) 'CxU)))))))))
+
+(tu/deftest-kb the-bulk-path-dedups-a-symmetric-mirror-against-a-stored-fact
+  ;; `bulk-assert-facts!` skips the dedup trie-walk, but a symmetric functor keeps it: the
+  ;; caller who writes `(sib b a)` cannot know it is the mirror of a stored `(sib a b)`
+  ;; without the `(symmetric P)` read the fast path is avoiding.  Stored raw it was a second
+  ;; record for one proposition — `count-with-functor` 2, both spellings retractable apart —
+  ;; which broke the "identical to loading one-by-one" contract (vaelii#61).
+  (let [sib (tu/tmp-pred) a (tu/tmp-ind) b (tu/tmp-ind)]
+    (v/assert kb (list 'symmetric sib) 'CxU)
+    (let [h (v/assert kb (list sib a b) 'CxU)]
+      (testing "the mirror, loaded in bulk, resolves to the stored handle"
+        (is (= [h] (v/bulk-assert-facts! kb [(list sib b a)] 'CxU))))
+      (testing "one record for the one proposition, at every read"
+        (is (= 1 (count (v/sentexes-matching kb (list sib '?p '?q) 'CxU))))
+        (is (= 1 (v/count-with-functor kb sib)))
+        (is (= h (v/handle-of kb (list sib b a) 'CxU)))
+        (is (= h (v/handle-of kb (list sib a b) 'CxU))))
+      (testing "retracting the one handle leaves nothing"
+        (v/retract! kb h)
+        (is (empty? (v/sentexes-matching kb (list sib '?p '?q) 'CxU)))))))
 
 (tu/deftest-kb an-anonymous-wildcard-consequent-is-rejected
   ;; `_` is a fresh variable at each occurrence, so it can never carry a binding from
@@ -635,9 +657,9 @@
   (let [s (sx/sentex '(exceptWhen (penguin ?b)
                                   (set/defaultRule (implies (bird ?b) (flies ?b)))) 'CxA)]
     (testing "no wrapper survives onto the stored sentence"
-      (is (= '(implies (bird ?var0) (flies ?var0)) (:sentence s)))
+      (is (= '(implies (bird ?var0) (flies ?var0)) (sx/sentence-of s)))
       (is (not (some '#{exceptWhen set/defaultRule}
-                     (tree-seq sequential? seq (:sentence s))))))
+                     (tree-seq sequential? seq (sx/sentence-of s))))))
     (testing "the sibling wrappers still canonicalize into their own fields"
       (is (true? (:defeasible s)))
       (is (= :backward (:direction s))))

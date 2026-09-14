@@ -154,8 +154,8 @@
   (when-let [sx (p/get-sentex (:records kb) h)]
     {:handle   h
      :sentence (if-let [vm (:varmap sx)]
-                 (sx/originalize (:sentence sx) vm)
-                 (:sentence sx))
+                 (sx/originalize (sx/sentence-of sx) vm)
+                 (sx/sentence-of sx))
      :context  (:context sx)}))
 
 (defn- signature
@@ -478,7 +478,7 @@
                      (comp (mapcat #(reads/as-stored-with-functor (:index kb) %))
                            (distinct)
                            (keep #(p/get-sentex (:records kb) %))
-                           (filter #(= :positive (:polarity %)))
+                           (filter #(not (sx/negative? %)))
                            (filter #(jtms/in? (:tms kb) (:id %))))
                      declaration-functors)]
     (progress! {:phase :declarations :done 0 :total (count stored)})
@@ -579,7 +579,7 @@
   (let [conseq (:consequent sx)
         neg?   (sx/negation? conseq)
         body   (if neg? (second conseq) conseq)
-        sent   (if-let [vm (:varmap sx)] (sx/originalize (:sentence sx) vm) (:sentence sx))]
+        sent   (if-let [vm (:varmap sx)] (sx/originalize (sx/sentence-of sx) vm) (sx/sentence-of sx))]
     {:handle     (:id sx)
      :context    (:context sx)
      :varmap     (:varmap sx)
@@ -610,7 +610,7 @@
       (if (= i total)
         (persistent! out)
         (let [sx (p/get-sentex (:records kb) (nth hs i))
-              v  (when (and sx (some? (:antecedent sx)) (= :positive (:polarity sx)))
+              v  (when (and sx (some? (:antecedent sx)))
                    (rule-view sx))]
           (when (and (pos? i) (zero? (mod i progress-every)))
             (progress! {:phase :subsumption :done i :total total}))

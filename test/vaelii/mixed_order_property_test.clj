@@ -290,7 +290,7 @@
       (fn [x]
         (if-let [id (and (v/sentex-handle? x) (v/handle-id x))]
           (if-let [sx (v/sentex kb id)]
-            (list 'sentexHandle (name-by-content kb (:sentence sx) (dec (long depth))))
+            (list 'sentexHandle (name-by-content kb (v/sentence-of sx) (dec (long depth))))
             x)
           x))
       form))))
@@ -304,7 +304,7 @@
                 (when (v/in? kb h)
                   (when-let [sx (v/sentex kb h)]
                     {:handle   (long h)
-                     :sentence (name-by-content kb (:sentence sx))
+                     :sentence (name-by-content kb (v/sentence-of sx))
                      :context  (:context sx)}))))
         (tu/sentex-ids kb)))
 

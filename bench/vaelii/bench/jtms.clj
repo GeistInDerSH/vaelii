@@ -40,7 +40,7 @@
             [vaelii.impl.jtms :as jtms]
             [vaelii.impl.protocols :as p])
   (:import [org.roaringbitmap RoaringBitmap]
-           [vaelii.impl.dense_jtms DenseTms]))
+           [vaelii.impl.dense_jtms DenseTms HeapColumns]))
 
 (defn- mb [b] (/ (double b) 1048576.0))
 (defn- retained ^long [objs] (postings/retained objs))
@@ -54,9 +54,9 @@
   credit the dense representation with a cost it does not pay."
   [tms]
   (if (instance? DenseTms tms)
-    [(.-jids ^DenseTms tms) (.-j-conseq ^DenseTms tms) (.-j-inf ^DenseTms tms)
-     (.-j-inf-sym ^DenseTms tms) (.-j-antes ^DenseTms tms) (.-j-outs ^DenseTms tms)
-     (.-j-mono ^DenseTms tms)]
+    (let [cols ^HeapColumns (.-cols ^DenseTms tms)]
+      [(.-jids ^DenseTms tms) (.-j-conseq cols) (.-j-inf cols)
+       (.-j-inf-sym ^DenseTms tms) (.-j-antes cols) (.-j-mono ^DenseTms tms)])
     [(:justs @tms)]))
 
 ;; ---- a KB with a JTMS actually built ------------------------------------
@@ -235,7 +235,7 @@
 (defn- strip-just-field
   "Nil one field of every justification, keeping the record shape — so the delta is
   exactly what that field's *value* retained, and a field holding a shared object
-  (a keyword, the empty `out` set) correctly reads zero."
+  (a keyword) correctly reads zero."
   [state k]
   (update state :justs (fn [js] (into {} (map (fn [[i j]] [i (assoc j k nil)])) js))))
 

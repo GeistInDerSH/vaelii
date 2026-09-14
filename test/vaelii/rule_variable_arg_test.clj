@@ -196,7 +196,7 @@
   "The stored rules in `ctx` whose sentence names `term` anywhere."
   [kb ctx term]
   (filter #(and (:antecedent %)
-                (some #{term} (tree-seq sequential? seq (:sentence %))))
+                (some #{term} (tree-seq sequential? seq (v/sentence-of %))))
           (v/sentexes-in-context kb ctx)))
 
 (tu/deftest-kb a-generator-mint-that-clashes-is-dropped-and-recorded

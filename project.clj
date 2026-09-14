@@ -1,4 +1,4 @@
-(defproject com.vaelii/vaelii "0.18.1"
+(defproject com.vaelii/vaelii "0.19.0"
   :description "Vaelii — a contextualized common-sense knowledge base with a
                 count-aware trie index, forward/backward inference,
                 and JTMS truth maintenance, over an in-memory or on-disk store."
@@ -102,26 +102,6 @@
              :with-clingo {:jvm-opts [~(str "-Djna.library.path="
                                             (or (System/getenv "VAELII_CLINGO_LIB")
                                                 "/opt/homebrew/lib"))]}
-             ;; a foreign-format reader on the classpath for the one command you
-             ;; prefix; scripts/link-checkouts.sh is the other route (docs/foreign.md).
-             ;;
-             ;; GROUP-QUALIFIED, and it has to be. A bare `vaelii-foreign` means
-             ;; groupId AND artifactId `vaelii-foreign`, which is not what is
-             ;; published — the release is `com.vaelii/vaelii-foreign`.
-             ;;
-             ;; `:exclusions` on vaelii itself: the plugin depends on the released
-             ;; vaelii, so without this the profile drags that jar onto the classpath
-             ;; of a *checkout of vaelii*, beside the `src/` being edited. Source paths
-             ;; win today, so it works and hides itself — until local source diverges
-             ;; from the release and a stale class answers instead.
-             ;; The snapshot of the version being cut, in step with `defproject`
-             ;; above: the release carve strips the snapshot suffix tree-wide, so
-             ;; this pin ships naming the sibling release that goes out beside it.
-             ;; Naming a *released* coordinate here would resolve from Clojars today
-             ;; and then ship a release pinning the previous one. The sibling is
-             ;; developed from source — scripts/link-checkouts.sh — or `lein install`ed.
-             :with-foreign {:dependencies [[com.vaelii/vaelii-foreign "0.18.1"
-                                            :exclusions [com.vaelii/vaelii]]]}
              ;; static analysis, dev-only so none of it reaches an uberjar. Keep
              ;; lein-cloverage's version in step with scripts/coverage.sh, which injects
              ;; the same plugin at the root level so `cloverage` registers under
@@ -370,6 +350,7 @@
             "bench-memory"    ["with-profile" "+bench" "run" "-m" "vaelii.bench.memory"]
             "bench-memconjoin" ["with-profile" "+bench" "run" "-m" "vaelii.bench.memconjoin"]
             "bench-scale"     ["with-profile" "+bench" "run" "-m" "vaelii.bench.scale"]
+            "bench-settlephases" ["with-profile" "+bench" "run" "-m" "vaelii.bench.settle-phases"]
             "bench-postings"  ["with-profile" "+bench" "run" "-m" "vaelii.bench.postings"]
             "bench-survey"    ["with-profile" "+bench" "run" "-m" "vaelii.bench.survey"]
             "bench-densetrie" ["with-profile" "+bench" "run" "-m" "vaelii.bench.densetrie"]
@@ -380,17 +361,17 @@
             "bench-forward"   ["with-profile" "+bench" "run" "-m" "vaelii.bench.forward"]
             "bench-plan"      ["with-profile" "+bench" "run" "-m" "vaelii.bench.plan"]
             ;; what shape of question a KB is asked, and what its index does with each
-            ;; shape.  `+with-foreign` so the `corpus` arm resolves the `:cyc-corpus`
-            ;; reader through the plugin, as bench-caches does.
-            "bench-profile"   ["with-profile" "+bench,+with-foreign" "run" "-m" "vaelii.bench.profile"]
+            ;; shape.  The `corpus` arm resolves the `:cyc-corpus` reader off the
+            ;; classpath; scripts/link-checkouts.sh puts it there (docs/foreign.md).
+            "bench-profile"   ["with-profile" "+bench" "run" "-m" "vaelii.bench.profile"]
             ;; the index bake-off — one corpus, one workload, N layouts, and the access
-            ;; path each goal took beside how long it took.  `+with-foreign` for the same
-            ;; reason bench-profile has it: the `corpus` arm resolves the `:cyc-corpus`
-            ;; reader through the plugin.
-            "bench-index"     ["with-profile" "+bench,+with-foreign" "run" "-m" "vaelii.bench.index"]
+            ;; path each goal took beside how long it took.  Its `corpus` arm needs the
+            ;; `:cyc-corpus` reader on the classpath, as bench-profile's does.
+            "bench-index"     ["with-profile" "+bench" "run" "-m" "vaelii.bench.index"]
             ;; the bake-off's structural counterpart — objects and bytes on the walk,
-            ;; counted rather than timed, over the same layout table.
-            "bench-alloc"     ["with-profile" "+bench,+with-foreign" "run" "-m" "vaelii.bench.alloc"]
+            ;; counted rather than timed, over the same layout table.  No corpus arm,
+            ;; so it reads no foreign format.
+            "bench-alloc"     ["with-profile" "+bench" "run" "-m" "vaelii.bench.alloc"]
             "bench-qcn"       ["with-profile" "+bench" "run" "-m" "vaelii.bench.qcn"]
             ;; the metric half of time beside the qualitative one: what a closure costs
             ;; from nothing, what an arriving constraint costs the answer after it, and
@@ -429,9 +410,10 @@
             ;; Large sizes want heap: `lein update-in :jvm-opts conj '"-Xmx24g"' -- …`
             "bench-recoverphase" ["with-profile" "+bench" "run" "-m" "vaelii.bench.recoverphase"]
             ;; the rebuildable caches' resident bytes and the KB-quality readings, in one
-            ;; JVM because both sit behind the same expensive corpus load.  `+with-foreign`
-            ;; too: a corpus run resolves the `:cyc-corpus` reader through the plugin.
-            "bench-caches"    ["with-profile" "+bench,+with-foreign" "run" "-m" "vaelii.bench.caches"]
+            ;; JVM because both sit behind the same expensive corpus load.  A corpus run
+            ;; resolves the `:cyc-corpus` reader off the classpath; link it with
+            ;; scripts/link-checkouts.sh first (docs/foreign.md).
+            "bench-caches"    ["with-profile" "+bench" "run" "-m" "vaelii.bench.caches"]
             ;; the performance *gate*, as against the bench-* reports above: scaling
             ;; claims as growth ratios, non-zero exit on a regression
             "perf"            ["with-profile" "+bench" "run" "-m" "vaelii.bench.perf"]

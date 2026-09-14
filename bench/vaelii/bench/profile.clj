@@ -39,9 +39,10 @@
   A corpus run wants a heap, and `:bench` pins `-Xmx6g`.  An environment `JVM_OPTS` is
   placed before the project's own options and loses to it silently, so edit the vector on
   the way past — `with-profile` first, `update-in` second, as `scripts/run-bench-caches.sh`
-  documents:
+  documents.  The `corpus` arm reads `:cyc-corpus`, so link the reader first
+  (`scripts/link-checkouts.sh`):
 
-      lein with-profile +bench,+with-foreign update-in :jvm-opts conj '\"-Xmx32g\"' -- \\
+      lein with-profile +bench update-in :jvm-opts conj '\"-Xmx32g\"' -- \\
         run -m vaelii.bench.profile corpus <dir>"
   (:require [vaelii.bench.util :as u]
             [vaelii.core :as v]
@@ -700,7 +701,7 @@
   [kb sx]
   (if-not (try (v/retract! kb (:id sx)) true (catch Throwable _ nil))
     :refused
-    (if (try (v/assert kb (:sentence sx) (:context sx) {:strength (:strength sx)}) true
+    (if (try (v/assert kb (v/sentence-of sx) (:context sx) {:strength (:strength sx)}) true
              (catch Throwable _ nil))
       :done
       :lost)))
@@ -809,7 +810,7 @@
   "One line naming a sentex, cut to `n` characters.  A corpus `comment` runs to
   paragraphs, and a line naming the pair wants the predicate and its arguments."
   [sx ^long n]
-  (let [s (pr-str (:sentence sx))]
+  (let [s (pr-str (v/sentence-of sx))]
     (str (if (<= (count s) n) s (str (subs s 0 n) " …")) " in " (:context sx))))
 
 (defn- churn-line [label group sampled]
@@ -867,7 +868,7 @@
                            :heap (format "reached %.0f%% of the maximum heap"
                                          (* 100.0 heap-ceiling)))))
   (when sx
-    (println (format "  ** the pair was %s in %s" (pr-str (:sentence sx)) (:context sx))))
+    (println (format "  ** the pair was %s in %s" (pr-str (v/sentence-of sx)) (:context sx))))
   (println (format "  ** %,d sampled facts were dropped; the tallies below cover what ran"
                    left))
   (when (= :pair why)

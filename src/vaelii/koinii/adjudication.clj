@@ -179,7 +179,7 @@
     (into [] (comp (map :id)
                    (filter #(contains? (:dispute-ids (who-ruled kb %)) k))
                    (distinct))
-          (v/sort-by-content :sentence
+          (v/sort-by-content v/sentence-of
                              (v/sentexes-in-context kb (id/context-for arbiter)
                                                     {:believed? true})))))
 
@@ -229,9 +229,9 @@
         ;; (`{:believed? true}`) because a claim the arbiter's context stores but no longer
         ;; believes is not a side they hold: a defeated claim would convict them of being a
         ;; party to a dispute they have already stepped out of.
-        mine (into #{} (comp (remove #(who-ruled kb (:id %))) (map :sentence))
+        mine (into #{} (comp (remove #(who-ruled kb (:id %))) (map v/sentence-of))
                    (v/sentexes-in-context kb actx {:believed? true}))]
-    (when (some #(contains? mine (:sentence %)) held)
+    (when (some #(contains? mine (v/sentence-of %)) held)
       (throw (ex-info (str "koinii: " arbiter " is a party to dispute " (pr-str k)
                            " — an arbiter's ruling lands in the arbiter's own context, so"
                            " ruling a dispute they hold a side of would restamp or retract"
@@ -338,7 +338,7 @@
                     {:type :koinii/identity-unverified :policy id/*policy*
                      :resolution :majority :dispute id})))
   (let [{yes :for no :against :as counts} (tally kb claim-handle)
-        claim    (:sentence (v/sentex kb claim-handle))
+        claim    (v/sentence-of (v/sentex kb claim-handle))
         standing (standing-rulings kb majority-arbiter id)
         decide   (fn [outcome upheld]
                    (let [h (rule kb majority-arbiter id upheld channel)]
@@ -414,7 +414,7 @@
     (if (seq visible)
       (let [contested (into #{} (mapcat :dispute-id) (d/disputes-in kb ctx))
             support   (into #{} (mapcat #(support-handles kb (:id %))) visible)]
-        (v/sort-by-content #(let [sx (v/sentex kb %)] [(:sentence sx) (:context sx)])
+        (v/sort-by-content #(let [sx (v/sentex kb %)] [(v/sentence-of sx) (:context sx)])
                            (filterv contested support)))
       [])))
 

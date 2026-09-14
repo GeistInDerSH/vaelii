@@ -11,233 +11,285 @@ releases is still a grep for the name you call. The full entry prose for a relea
 version is in this file's git history, at the tag of the release that shipped it —
 `git show v0.16.0:CHANGELOG.md`.
 
+## 0.19.0 — 2026-09-13 — "a belief image in place of recover, and sentex records that no longer restate their sentence"
+
+- **Under `:refuse`, a declaration arriving after the content it convicts decides the
+  clash.** A `disjoint`, `disjoint_metatype`, `genl`-edge, `functional`, `asymmetric`,
+  `anti_transitive` or `functionalInArg` declaration landing over stored facts it convicts
+  now defeats the weaker side, or reports an equal-strength set in `contradictions`, under
+  the default `:refuse` policy as under `:arbitrate`. `:refuse` filed such a clash in
+  `violations` and kept both sides believed, while a recover of the same records decided
+  it, so a KB believed one thing live and another after a restart. A clash only a common
+  descendant context sees is still reported, not decided, under `:refuse`.
+  *Class:* **Breaking** (a `:refuse` KB whose schema arrives last disbelieves the weaker
+  member, and reports the pair in `contradictions` or `conflicts` rather than
+  `violations`). *Migration:* read a late-declaration clash off `contradictions` /
+  `conflicts` rather than `violations`; state both sides at equal strength to keep both
+  believed. [docs/nmtms.md](docs/nmtms.md), [docs/contexts.md](docs/contexts.md)
+
+  *Breaks:* `:refuse`, `violations`
+
+- **A rule map has no `:sentence`; its `:antecedent` and `:consequent` are the rule.** A
+  rule record held its whole `(implies (and …) …)` form beside the antecedent vector and
+  the consequent it was split into, and about half the engine's rule readers re-split the
+  form rather than reading the fields. The record drops the `sentence` slot, and every
+  reader takes the fields; `sentence-of` (new, public) builds the canonical `implies`
+  form from them, and `readable-sentence` the same form in the author's variable names.
+  The daemon serves `sentence-of` as the `:sentence-of` op, which takes no KB.
+  The trie key is built from that same form, so an index written before this change reads
+  unchanged. A disk frame drops the field (new rule tags; older frames decode by reading
+  past it): a rule frame on the plain codec is 132–143 B where it was 219–238 B on the
+  three corpora measured, and a `RuleSentex` is 72 B on the heap where it was 80 B, before
+  counting the `implies` form it no longer holds. An export dump's rule frame still
+  carries `:sentence`, so the dump format is unchanged. A negated rule
+  `(not (implies …))`, which `assert` already refuses, is now refused by the constructor
+  too, since a record with no sentence has no place for the sign. *Class:* **Breaking** (`sentex`, `sentexes-matching`, `canonical-sentex` and the
+  extent readers return rule maps without `:sentence`, and the daemon's wire records lose
+  the key). *Migration:* a caller that read a rule's `(:sentence s)` calls `(sentence-of
+  s)`, or `(readable-sentence s)` for display; a caller that split the sentence reads
+  `:antecedent` and `:consequent`. [docs/api.md](docs/api.md),
+  [docs/storage.md](docs/storage.md)
+
+  *Breaks:* `sentex`, `sentexes-matching`, `canonical-sentex`, `:sentence`
+
+- **A sentex map has no `:polarity` key; a negative literal's `:sentence` is its sign.**
+  Every literal carried `:positive` / `:negative` beside a sentence whose head `not`
+  already said the same, and every rule carried `:positive`. The records drop the slot,
+  and a disk frame drops the field: 10 B off every literal frame on the plain codec (53 to
+  91 B before), and no heap change, the 48 B `LiteralSentex` being aligned either way. A
+  store written with the polarity field reads unchanged. The index fingerprint and the
+  koinii locator digest the same sign keyword as before, so an index dump and a locator
+  stay valid. *Class:* **Breaking** (`sentex`, `sentexes-matching`, `canonical-sentex`
+  and the extent readers return maps without `:polarity`, and the daemon's wire records
+  lose the key). *Migration:* a caller that read `(:polarity s)` tests the sentence
+  instead — `(= 'not (first (:sentence s)))` is `:negative` — and a rule has no sign of
+  its own. [docs/api.md](docs/api.md), [docs/storage.md](docs/storage.md)
+
+  *Breaks:* `sentex`, `sentexes-matching`, `canonical-sentex`, `:polarity`
+
+- **`bravely` and `cautiously` classify the dilemmas without an ASP backend.** With no
+  backend reachable, the `:brave-cautious` reasoner reported every contested datum
+  `:supportable`, so `bravely` held for each and `cautiously` for none. It now reads
+  `label/classify-local`, which enumerates the dilemmas' minimum resolutions from the JTMS
+  dependency graph and classifies each believed datum a resolution moves: `:true` when
+  every resolution keeps it, `:supportable` when some do, `:false` when none do. So a
+  conclusion drawn from both sides of one dilemma is `cautiously` true, and a member that
+  two coupled dilemmas both rebut is neither brave nor cautious. Three new switches cap the
+  enumeration — `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS` (default 12),
+  `VAELII_CLASSIFY_RESOLUTION_BUDGET` (20000) and `VAELII_CLASSIFY_MAX_JOINT_OPTIMA`
+  (1024) — and a datum past any cap stays `:supportable`. The classification reads the
+  justification graph and never re-evaluates an `unknown` antecedent, so a conclusion an
+  `unknown` condition decides is read from current belief. With a backend reachable the
+  prover still reads `classify-program`, whose program holds each member as an independent
+  choice, so on coupled dilemmas it reports every member `:supportable`.
+  *Class:* **Breaking** (without a backend, `cautiously` now answers true and `bravely`
+  false where the documented degradation answered false and true). *Migration:* a caller that read
+  `bravely` / `cautiously` without a backend as "every contested datum is one of several
+  options" reads the classification instead; with a backend reachable the answers are
+  unchanged. [docs/labeling.md](docs/labeling.md), [docs/operations.md](docs/operations.md)
+
+  *Breaks:* `bravely`, `cautiously`
+
+- **A justification names its rule once, as `:informant`, and carries no `:out`.** A
+  rule firing's justification listed the rule handle both as `:informant` and among
+  `:antecedents`, and every justification carried an `:out` set nothing ever filled.
+  `:antecedents` now holds only what the firing matched and the edges it read; the TMS
+  treats a rule-handle informant as an implicit antecedent, so validity, retraction and
+  defeat of the rule withdraw its conclusions exactly as before, and `why-not`'s
+  `:missing` still names an OUT rule. A justification frame on disk is six fields where
+  it was seven, 2.6–3.0 B smaller on the three corpora measured; a store or dump written
+  with seven-field frames reads unchanged, the rule stored once. *Class:* **Breaking**
+  (`justification`, `supporting-justifications` and `dependent-justifications` return
+  records whose `:antecedents` no longer contain the rule handle and which have no `:out`
+  key). *Migration:* a caller that looked for the rule among `:antecedents` reads
+  `:informant`, which is the rule's handle whenever it is an integer; a caller that read
+  `:out` drops the read. [docs/nmtms.md](docs/nmtms.md), [docs/naf.md](docs/naf.md)
+
+  *Breaks:* `justification`, `supporting-justifications`, `dependent-justifications`
+
+- **A `:disk-snapshot` KB installs a belief image in place of `recover`.** After a full
+  recover, and at close when the records moved, a `:disk-snapshot` KB on the dense network
+  writes its whole belief state — the network, the taxonomy and the KB atoms recovery
+  fills — to `<dir>/belief/`. The next open installs that image instead of recovering when
+  its stamp equals the KB's: the records' fingerprint, the source identity (a digest of the
+  engine source that derives belief, comments and docstrings excluded) and the belief
+  policies. A KB with a registered prover or evaluatable takes no image. `export!` writes
+  the image into the dump's `belief/` directory by default (`:belief? false` omits it), and
+  `import!` with `{:belief? true}` installs it in place of the recover when the import kept
+  every handle; the import summary's `:belief-image` reports which happened. The belief
+  certificate and its switch are gone.
+  *Class:* **Refusal** (`vaelii.belief.snapshot` is refused at every spelling).
+  *Migration:* unset `vaelii.belief.snapshot`; a store opened as `{:backend :disk-snapshot}`
+  writes and installs the image with no switch.
+  [docs/storage.md](docs/storage.md#the-belief-image), [docs/api.md](docs/api.md),
+  [docs/defenses.md](docs/defenses.md#a-belief-image-is-installed-whole-or-not-at-all)
+
+  *Breaks:* `vaelii.belief.snapshot`
+
+- **A `genlCx` cycle is refused at assert, like a `genl` cycle.** A cycle between two
+  contexts that see each other was admitted before — `genlCx-problems` checked only the
+  self-edge — so an edge whose super already saw its sub closed a mutually-visible
+  component. `genlCx-problems` now reads the global `genlCx` closure (`tax/genlCx?-global`,
+  the twin of `genl?-global`) and refuses that edge with `:not-well-formed`, so the context
+  hierarchy is a partial order like the type hierarchy. A cycle still reaches the taxonomy
+  another way and is still condensed: `recovery/recover` replays a stored edge past the
+  assert checks, so a store an older or foreign writer left with a `genlCx` cycle loads and
+  ranks over its condensation as before. *Class:* **Refusal** (a cycle-closing `genlCx` edge
+  that asserted before now throws). *Migration:* an ontology stating mutual visibility
+  between two contexts through a `genlCx` cycle models it another way — a context is where a
+  sentex is stored, and the two stay distinct records — while a recovered or foreign store
+  holding such a cycle is unaffected. [docs/contexts.md](docs/contexts.md),
+  [docs/taxonomy.md](docs/taxonomy.md)
+
+  *Breaks:* `genlCx`
+
+- **Three write paths stored a record no belief-filtered read could find — an inert NAT, a
+  bulk symmetric mirror, and `canonical-sentex`'s key — and a NAT-shaped type node threw
+  the disjointness audit.** A reifiable compound reached the store unresolved on a path
+  below `assert`, leaving a record reachable by its handle and by a `CxEverything` read and
+  by nothing a query reifies to. `assert-inert` stored `(likes Rex (FruitFn Apple))` as
+  written, so `assert` of the same sentence minted `(likes Rex nat/…)` at a second handle,
+  `count-with-functor` answered 2 for one proposition, and the reads split across two
+  spellings; it now resolves a ground reifiable NAT to its stored constant first (dedup,
+  never mint), as `handle-of` and `sentexes-matching` do, and refuses a NAT this KB never
+  minted (`:unminted-nat`), since minting a `termOfUnit` is a belief-carrying side effect
+  the entry point never has. `bulk-assert-facts!` under `(symmetric P)` stored the mirror of
+  a stored literal as a second record, because the fast path skips the dedup probe and the
+  caller who wrote `(siblingOf Bob Ann)` cannot know it canonicalizes onto a stored
+  `(siblingOf Ann Bob)`; a symmetric functor now keeps the probe (one taxonomy read per row
+  for a rare mark), so the bulk result is again identical to loading the facts one-by-one.
+  `canonical-sentex` returned the compound for a NAT sentence though its docstring promises
+  the key `assert` stored, and now reifies for read and agrees with `handle-of`, documenting
+  that a NAT with no minted constant has no canonical stored form yet. `disjointness-audit`
+  sorted `(types kb)` with bare `sort`, and `compare` throws on a list, so a KB with a NAT
+  type node threw a bare `ClassCastException`; it orders by `by-print-key` now, as
+  `disjoint-line` already does. *Class:* **Refusal** (`assert-inert` turns a previously-
+  stored unminted-NAT compound into `:unminted-nat`; the bulk dedup, the `canonical-sentex`
+  agreement and the audit ordering are fixes). *Migration:* nothing for a caller whose inert
+  NATs already have a stored constant; a caller storing a not-yet-minted reifiable compound
+  inert asserts the NAT-bearing fact first, which mints it, then stores it inert.
+  [docs/nat.md](docs/nat.md), [docs/canonicalization.md](docs/canonicalization.md)
+
+  *Breaks:* `assert-inert`
+
+- **A constraint rule may not spell an internal solve marker as its consequent.**
+  `cardAtMost`, `cardAtLeast`, `minimizeCost` and `softPriority` are the consequent markers
+  the answer-set surfaces normalize into — `asp/atMost` / `asp/atLeast` and their soft
+  twins, `asp/minimize`, and a priority-tagged `set/softConstraint`. A hand-written marker
+  skipped the surface's operand checks, so `(set/hardConstraint (implies (pickCity ?a ?c)
+  (cardAtMost ?a ?c)))` stored, and `do/label` then threw a bare `ClassCastException`
+  reading `?a`'s binding as the count. `rules/refuse-internal-marker` refuses such a rule at
+  `assert` with `:not-well-formed`, names the surface form to write, and `check` reports the
+  same problem. *Class:* **Refusal** (a hand-written `cardAtMost` / `cardAtLeast` constraint
+  consequent that asserted before now throws). *Migration:* write the surface form —
+  `(asp/atMost k ?counted pattern)` in place of `(set/hardConstraint (implies pattern
+  (cardAtMost k ?counted)))`, and the soft twins in place of `set/softConstraint`; the surface
+  normalizes into the same stored rule, so the handle is unchanged, and a KB exported with
+  `export-text!` already spells the surface. [docs/solving.md](docs/solving.md)
+
+  *Breaks:* `cardAtMost`, `cardAtLeast`
+
+- **`asp/minimize` and a priority on `set/softConstraint` give a solve a weighted,
+  prioritized objective.** `(asp/minimize priority ?weight body)` adds `?weight` to the
+  objective at level `priority` for every binding of `body`, whose choice literal names
+  the chosen head and whose background literal binds the weight — clingo's
+  `#minimize{ W@P, … }`. `(set/softConstraint priority (implies …))` places an ordinary
+  soft constraint at a level other than 1. Distinct priorities are distinct lexicographic
+  minimize levels above the keep-belief and tiebreak levels, so a lower priority breaks
+  ties among the higher level's optima and never trades against it. `assert` refuses a
+  priority that is not a positive integer, a weight slot that is not a variable the body
+  binds, and a priority on `set/hardConstraint`, as `:not-well-formed`, and `check` reports
+  each. Grounding refuses a weight a background fact binds to anything but an integer
+  inside the solver's 32-bit range, naming the weight. `export-text!` writes both forms as
+  authored. *Class:* **Additive**. [docs/solving.md](docs/solving.md)
+
+- **A `:disk-snapshot` open declines an image of records a `clear!` removed.** The index
+  image and the belief image are stamped with a fingerprint of the record store's slots
+  (handle, offset, length), which reads no content. `clear!` truncates the logs, so
+  records of the same byte lengths written after it refilled the old slots exactly, and
+  the next open mapped the old index image or installed the old belief image over the new
+  records. `clear!` now mints a random epoch into the store's counters blob, and both
+  fingerprints carry it. A store no `clear!` has emptied carries no epoch, so the images
+  already on disk stay valid. *Class:* **Fix**. [docs/storage.md](docs/storage.md)
+
+- **A defeat that releases an `unknown` antecedent or an `exceptWhen` exception
+  re-derives the conclusion it had blocked.** Under `(pp ?x) ∧ (unknown (happy ?x)) →
+  (rr ?x)`, asserting `(pp Zed)`, then a default `(happy Zed)`, then a monotonic `(not
+  (happy Zed))` left `(rr Zed)` underived, while every order that asserted the negation
+  earlier derived it. The firing was placed, then blocked and swept when `(happy Zed)`
+  arrived. The defeat moves `(happy Zed)` OUT without removing it, and the swept firing had
+  left no blocked justification and no refusal record to re-ask. A settle pass now
+  re-chains every rule watching the predicate of a datum it newly defeated
+  (`settle/released-by-defeat`). *Class:* **Fix** (the belief docs/naf.md promises
+  order-independent). *Migration:* none. [docs/naf.md](docs/naf.md)
+
+- **A `genlCx` edge arriving last exposes the `functional`, `asymmetric`,
+  `anti_transitive` or `functionalInArg` clash it reveals.** A mark in one context and two
+  clashing facts together in another form a clash only once a `genlCx` edge lets the facts'
+  context see the mark's. With the edge arriving after both, neither the `:refuse` exposure
+  pass nor the `:arbitrate` deciding path found the clash, so belief depended on arrival
+  order. The exposure pass read the marks visible to the edge's super context, which gains
+  no new sight; it now reads them from the sub context. The deciding path reached only
+  disjointness memberships from a `genlCx` edge, and now reaches the marked facts as well,
+  within the same budget. *Class:* **Fix** (the order independence docs/nmtms.md
+  promises). *Migration:* none. [docs/nmtms.md](docs/nmtms.md),
+  [docs/contexts.md](docs/contexts.md)
+
+- **Retracting one `functionalInArg` position of a predicate retires the clashes only that
+  position convicted.** The clash memo keyed its vocabulary on the set of predicates
+  carrying a `functionalInArg` declaration, and a predicate may carry several positions.
+  Retracting one position while another remained left the key unchanged, so
+  `contradictions` and `conflicts` kept reporting a pair only the retracted position
+  convicted. The key is now the table from each predicate to its positions.
+  *Class:* **Fix**. *Migration:* none. [docs/nmtms.md](docs/nmtms.md)
+
+- **`assert` of `(disjoint a b)` refuses a `genl`-related pair only where the asserting
+  context sees the edge.** The overlap check read the global `genl` closure, so the refusal
+  fired in a context where an `except` hid the bridging edge and the scoped `(genl a b)`
+  query answered empty. The check now reads the closure the asserting context sees, and
+  admits the pair where an `except` hides the edge. The `genl` cycle check and `disjoint?`'s
+  own `genl`-relatedness guard stay global. *Class:* **Fix** (a `disjoint` refused before
+  now stores where the scoped query finds no `genl` edge between the pair).
+  *Migration:* none. [docs/taxonomy.md](docs/taxonomy.md)
+
+- **`close!` releases a KB's rete alpha memories and its derived RAM index, and a failed
+  `open-kb` releases the directory lock it took.** The alpha-memory registry held each KB
+  it tracked by a strong key and released nothing. A disk-backed KB with a derived index
+  (`:disk-dense`, `:disk-columnar`, `:disk-memory`) kept that index in a process-wide
+  registry keyed by its directory after `close!`. A process that opened KBs in a loop
+  therefore kept one alpha memory and one derived index per KB it had closed. The registry
+  now keys each KB weakly, and `close!` drops the KB's alpha memories and its derived
+  index; both rebuild from the records on the next use. The alpha memories register as the
+  `:rete-alpha` cache, which the memory-pressure guard may drop. An `open-kb` that threw
+  after its durable stores resolved — a stale-index refusal, a `:pg` identity mismatch, a
+  recover over a corrupt store — held the directory's exclusive lock until the JVM exited,
+  and no later open of that directory succeeded. `open-kb` now closes the directories the
+  call opened when construction throws. *Class:* **Fix**. *Migration:* none.
+  [docs/api.md](docs/api.md), [docs/caches.md](docs/caches.md)
+
+- **The web `/kbs/load` route opens a disk store with the backend its layout names.** The
+  route opened every store as `:disk-log`, so a store with a derived index
+  (`:disk-columnar`, `:disk-snapshot`) opened with 0 sentexes and gained an empty
+  `index/kv.log`. The route now reads the store's `index/` directory: `trie.csr` opens
+  `:disk-snapshot`, `kv.log` opens `:disk-log`, and neither opens `:disk-columnar`, which
+  rebuilds its index on open. The open passes `:recover? :auto`, so a stored belief image
+  installs when its stamp matches. *Class:* **Fix**. *Migration:* none.
+  [docs/catalog.md](docs/catalog.md), [docs/web.md](docs/web.md)
+
 ## 0.18.1 — 2026-09-11 — "a typed bound at every entry point, and an upper ontology divided by space and time"
 
-- **Every bounded entry point refuses a value outside its domain by name, and the anytime
-  budget roster splits into what `ask-within` reads and what `prove-within` reads.** A bound
-  holding a value it cannot mean — a string `:max-ms`, a non-integer `:max-depth`, a non-fn
-  `:on-progress`, a string `:believed?` — reaches arithmetic or a call and throws a bare
-  `ClassCastException`, which the daemon answers `:internal-error` (a 500) where every sibling
-  refusal is a typed 400. `prove` / `ask` / `query` / `why` / `find-terms` already refuse
-  their caps; `prove-within`, `ask-within`, `search-tree`, `compare-tacticians`,
-  `forward-chain`, `assert`, `assert-rule`, `abduce`, `kb-quality`, `export!`, `import!`,
-  `clear-caches` and the extent readers now do too, reading the one shared domain table
-  (`vaelii.impl.opts/bound-domains`). A bound of `0` stays a real question wherever it was
-  one — no time, no rule expansion, realize nothing and resume, report at every opportunity.
-  Beside the value gaps: `add-evaluatable` refuses a key off `#{:result :arity :cost
-  :completeness}`; `set-cache-limit` warns and records a pin for an id no cache has registered
-  yet rather than refusing it, since the register fills lazily; and `assert-rule` runs the
-  unrecovered-KB gate before its range check, so an unrecovered KB answers `:unrecovered-kb`
-  and not `:not-range-restricted`. The anytime roster splits the way `ask` and `prove` split
-  theirs: `ask-within` reads `:max-ms` / `:max-results` / `:max-cost` and refuses a rule
-  depth, `prove-within` reads the two clocks plus `:max-depth` / `:max-term-growth` and
-  refuses `:max-cost`, and `resume` holds the union so a continuation of either passes.
-  *Class:* **Refusal** (the two accepted-and-wrong boolean values answered at a setting nobody
-  chose, and the bad numbers crashed the daemon). *Migration:* nothing for a caller whose
-  bounds are numbers of the right kind; `(clear-caches kb {:counters? "yes"})` and an extent
-  read with a string `:believed?` were both accepted as `true` and are now `:unknown-option`,
-  so pass an actual boolean. [docs/api.md](docs/api.md), [docs/anytime.md](docs/anytime.md)
+**14 entries** — 2 Refusal, 4 Additive, 6 Fix. Every bounded entry point refuses a value
+outside its domain by name, reading one shared domain table, and `assert-inert` refuses an
+open sentence. The upper ontology divides `thing` by space and time, renames
+`spatial_thing` and `temporal_thing` to `spatial` and `temporal`, and adds a `CxUniverse`
+collector context. A process-wide cache profile scales every derived cache's bound, and a
+memory-pressure guard the servers install shrinks the caches as the old generation fills
+and grows them back as it drains. A reified NAT or context constant is named by the
+SHA-256 of its expression, so the same expression reifies to the same constant across
+processes, and the one-shot clingo solve injects its ground program through the backend
+accessors rather than a temp file.
 
-  *Breaks:* `:counters?`, `:believed?`, `:max-cost`, `:max-depth`, `:max-term-growth`, `add-evaluatable`
-
-- **`assert-inert` refuses an open sentence and stores an `(ist Ctx S)` form as S in
-  Ctx; `describe` refuses a `:limit`, and `why-not` a `:nearest`, that is not a count.**
-  An inert `(dog ?x)` was a stored record a `CxEverything` read answered as a fact, and a
-  stored sentence is closed (`checks/check-ground`, the refusal `assert` makes:
-  `:not-ground`). An `(ist CxA S)` stored as written was a record with the `ist` functor,
-  which `handle-of`, `contexts-of` and every read resolve past — reachable by its handle
-  and by nothing else; it now stores S in CxA, as `assert` does, and a malformed one is
-  `:shape`. `(describe kb t c {:limit 0})` answered every window empty under a `:total`
-  that read as an answer, and `{:limit "5"}` reached `take` and threw a bare
-  `ClassCastException`, which the daemon reports as `:internal-error`; both are
-  `:unknown-option` now, as at `find-terms`. `(why-not kb s c {:nearest "3"})` read the
-  value as no request and answered the plain `:not-stored`; a `:nearest` that is not a
-  non-negative integer is `:unknown-option`, and `0` still asks for nothing.
-  *Class:* **Refusal** (the stored records matched no query, and the accepted values
-  answered nothing a caller asked for). *Migration:* nothing for a caller whose inert
-  sentences are ground and whose caps are positive integers; a caller passing
-  `{:limit 0}` to `describe` for the totals alone passes `1` and reads `:total`.
-  [docs/api.md](docs/api.md), [docs/solving.md](docs/solving.md)
-
-  *Breaks:* `assert-inert`, `describe`, `why-not`
-
-- **The upper ontology gains a space/time division, a metatype-order ladder and an
-  expression subtree, renames `spatial_thing` to `spatial` and `temporal_thing` to
-  `temporal`, and adds a `CxUniverse` collector context for the cross-member disjoints.**
-  CxCore roots the space/time divisions — `spatial` and `aspatial`, `temporal` and
-  `atemporal` — and the `abstract` collection under `thing`, declares the complement
-  disjoints `(disjoint spatial aspatial)` and `(disjoint temporal atemporal)` beside the
-  cross-division `(disjoint intangible spatial)`, and re-roots `abstract` under
-  `intangible`; the rename removes `temporal`'s only prior upward edge, so
-  `(genl temporal thing)` restores it and `(disjoint physical_object intangible)` lands in
-  CxAbstract. A metatype-order ladder — `metatype`, `meta_metatype`, `at_least_metatype`,
-  `fixed_order_type`, `variable_order_type`, `type_type_by_order` — states the three-order
-  partition and its subtype edges, and the inert predicates `genlInverse`, `typeGenl` and
-  `partitionedByType` classify without an inference path. CxAbstract gains an `expression`
-  subtree under `abstract` holding `context`, `formula`, `relation`, `relation_application`
-  and `unrepresented_term`, and a substance division whose states are `solid`, `liquid`,
-  `gas` and the added `plasma`, with `liquid` moved out of `stuff_type_by_substance`
-  because a liquid is a state and not a material. The two `typeGenl` claims move from
-  CxCore, which sees no member, to CxAbstract, which sees `substance` and the stuff
-  metatypes, so a type-relating claim is written only in a context that sees the terms it
-  names. A new top-level `CxUniverse.txt` collector context holds `(disjoint organization
-  animal)`, a disjointness a single context sees both members of, and the starter loader
-  now discovers and loads top-level `kb/Cx<Name>.txt` collector files after the upper and
-  middle theories so the cross-member axiom is a live sentex. Three tests pin the shipped
-  set: one refuses a type-relating claim whose context cannot see a term it names, one
-  holds the six head-context terms kept there on purpose, and `ontology_test` pins the
-  quality clash census at `{:negation 4, :disjoint 8}` (the remaining eight come from the
-  integer-and-person checker, a stated limitation rather than real conflicts).
-  *Class:* **Additive** (shipped ontology content, which takes no Breaking label however
-  far it moves an answer). *Migration:* a KB that wrote `spatial_thing` or `temporal_thing`
-  renames to `spatial` / `temporal`; the old spelling stores clean under open-world
-  semantics but attaches to nothing in the taxonomy, so a spatial or temporal argument
-  check does not admit it. [docs/contexts.md](docs/contexts.md),
-  [docs/glossary.md](docs/glossary.md)
-
-  *Breaks:* `spatial_thing`, `temporal_thing`
-
-- **A process-wide cache profile scales every derived cache's count bound by one
-  multiplier, tunable through `VAELII_CACHE_SCALE` and three new `vaelii.core`
-  functions.** `caches/limit-of` is the one resolver every count-bounded cache reads, on
-  both its store path and its `caches` reporting row, so the enforced bound and the
-  reported bound are one number. It returns the shipped default at scale `1.0` with no
-  override, and otherwise `default × scale` floored at 16 entries. `VAELII_CACHE_SCALE`
-  (default `1.0`, a number at or above zero, read at load) sets the scale a process starts
-  with and refuses a non-number or a negative value at engine load. `(set-cache-scale x)`
-  multiplies every counted bound on a running process, `(set-cache-limit id n)` pins one
-  cache's bound or clears the pin with `nil`, and `(cache-profile)` returns the profile in
-  force as `{:scale m :overrides {id limit}}`; `set-cache-scale` and `set-cache-limit` each
-  refuse a value they cannot mean with `:type :unknown-option`. The browser `/caches` page
-  gains a scale form posting an origin-checked write beside the existing clear. At scale
-  `1.0` with no override the resolver returns the shipped default unchanged, so the cost
-  budgets and the perf gate read the same bounds as before. *Class:* **Additive** (three
-  new public functions and one new configuration name; `test/golden/api-surface.edn` and
-  `test/golden/config-surface.edn` move with them). [docs/caches.md](docs/caches.md),
-  [docs/operations.md](docs/operations.md)
-
-- **A memory-pressure guard shrinks the caches when the old generation fills after a
-  collection and grows them back as it drains.** The guard adds a second multiplier,
-  `:pressure`, to the cache profile, so a counted cache's bound becomes
-  `default × scale × pressure` floored at 16 entries and a pinned cache's bound becomes
-  `override × pressure`. A post-collection notification listener reads the old-generation
-  used-over-max fraction after each garbage collection: at or above `0.85` it halves
-  pressure and trims the counted caches to the lower bound, at or below `0.60` it raises
-  pressure by half again while pressure is below `1.0`, and otherwise it holds. Pressure
-  is clamped to `[0.125, 1.0]`, so a heap under sustained pressure keeps an eighth of each
-  cache rather than emptying it. The trim keeps the earliest entries of a plain map and
-  defers to a shape-aware cache's own recency order rather than clearing. The daemon and
-  the browser install the guard at startup — the browser feeds it the live KBs through the
-  catalog — and nothing attaches it at engine load, so a library embedding arms no
-  listener. A JVM whose collectors emit no such notification, or that names no
-  old-generation pool, holds pressure at `1.0`. `limit-of`'s docstring is corrected in the
-  same batch to say a pin is scaled by pressure alone, not by the profile scale.
-  *Class:* **Additive** (`install-memory-guard!` and the profile's `:pressure` field are
-  new; the guard's functions stay in `vaelii.impl.caches` and the servers install them, so
-  no public-API golden moves). [docs/caches.md](docs/caches.md)
-
-- **A reified NAT or context constant is named by the SHA-256 of its expression, not a
-  per-process counter, so the same expression reifies to the same constant across
-  processes and rebuilds.** `constant-for` names a minted constant `nat/a<17 base62
-  digits>`, or `cx/a…` for a context NAT, from the first 96 bits of the SHA-256 of the
-  printed expression, where the prior scheme minted `nat/g<N>` from a process-local
-  `gensym` counter. The base62 payload holds `[A-Za-z0-9]` only, because a reified constant
-  sits in argument position and the naming check forbids the `-` and `_` a base64url
-  payload would carry. The constant symbol is documented as opaque and never read back — a
-  page and a remote reader are held to never show it, and belief never keys on it — so a
-  caller resolving the constant through `term-expression` or `expand-expression` still
-  reads the expression `(FruitFn AppleTree)` and observes no change. The content name
-  extends the engine's order-independence property to the constant symbol itself: two
-  processes that mint the same NAT now spell it identically, where the counter spelled it
-  by allocation order and left the cross-process merge to the collision-repair path. A dump
-  written by an earlier release keeps its `nat/g…` names, because dedup by the stored
-  `termOfUnit` expression runs before any mint and re-reifying resolves to the existing
-  constant. The skolem head-existential witnesses inherit the scheme through the same mint
-  path, and a hash collision degrades only into the ordinary two-expressions-one-constant
-  case the merge already reconciles by content. *Class:* **Fix** (the documented
-  order-independence invariant and the opaque-constant contract both held; the constant
-  symbol moves to match them). [docs/nat.md](docs/nat.md), [docs/skolem.md](docs/skolem.md)
-
-- **`kb-quality` stops reporting a clash that no ground term can reach, when an antecedent
-  `arg` declaration demands a type disjoint from the term the paired rule types.**
-  `kb-quality`'s contradictions-in-waiting reading reports two rules whose consequents
-  place one unified term in two disjoint types, a clash that could form if both rules fire
-  for that term. A fourth rule-out reads each antecedent predicate's `arg` declarations up
-  the predicate hierarchy — through the reader `assert` uses — and drops a pair when a
-  declared argument type is disjoint from another type the two rules place the unified term
-  in, because no ground term then satisfies both antecedents. The rule-out reads the two
-  consequents beside the antecedents, since the demanding literal states nothing about its
-  own argument's type and the demand lives on the paired rule's `arg` declaration. At least
-  one side of a disjoint pair must be a declared argument type, so two stated unary-literal
-  types that clash stay the clash the pair reports. The rule-out reads `arg` and not
-  `genlArg` or the covering forms, because `genlArg` demands a subtype one stratum up and
-  no shipped rule concludes a unary type from a `genlArg`-typed antecedent. The docstring
-  and `docs/quality.md` already described the reading as one that reports a clash that could
-  form, so the code moves to stop reporting the unreachable pairs; the shipped clash census
-  drops the relation-classification false positives the upper-ontology additions
-  introduced, leaving the eight integer-and-person residual pairs `ontology_test` pins.
-  *Class:* **Fix**. [docs/quality.md](docs/quality.md)
-
-- **`handle-of` and the sentence arity of `why-not` resolve a ground reifiable NAT to
-  its stored constant, as `sentexes-matching` and `ist` do.** After
-  `(ist kb C '(likes Rex (FruitFn Apple)))` stored `(likes Rex nat/…)`,
-  `(handle-of kb '(likes Rex (FruitFn Apple)) C)` answered nil and `why-not` answered
-  `:not-stored`, so `(retract! kb (handle-of kb s c))` — the composition the docstrings
-  name — retracted nothing and reported `{:removed-sentexes 0}`. Both now run the
-  read-mode reify (dedup, never mint) before the lookup. *Class:* **Fix**.
-  [docs/nat.md](docs/nat.md), [docs/api.md](docs/api.md)
-
-- **`provable?` and `ask?` refuse a non-map `opts` by name (`:unknown-option`), as
-  `prove` and `ask` do.** `(provable? kb g c :oops)` threw a bare
-  `IllegalArgumentException` out of the `seq` that picks the bounded arm; the roster
-  check now runs first. The daemon pads its arguments to the option arity and answered
-  `:bad-args` already, so only an in-process caller saw the difference. *Class:* **Fix**.
-  [docs/api.md](docs/api.md)
-
-- **`docs/api.md` matches the code for `reasoners`, `subsumption-status`, `contexts-of` and
-  `has-prop?`.** The API reference is corrected in four places to state what the functions
-  return. `reasoners` lists `:brave-cautious`, the ASP dilemma reader, beside the algebras.
-  `subsumption-status` returns `:inconsistent` when two of the `genl` relationships hold at
-  once, which the documented keyword set had omitted. `contexts-of` lists the contexts a
-  sentence is stored and believed in, so a defeated sentex's context is not among them,
-  where the line had said asserted. `has-prop?` recognizes six `:declares-*` prop kinds,
-  adding `:declares-arg-and-rest-isa` and `:declares-arg-and-rest-genl`. *Class:* **Fix**
-  (documentation only; the code already answered this way). [docs/api.md](docs/api.md)
-
-- **`docs/solving.md` states that a constraint background literal and an `assumptionRule`
-  antecedent ground over the registry leaf.** A constraint background literal and an
-  `assumptionRule` antecedent reach `provers/solve-goal`, the registry leaf, so a stored
-  fact, a backward rule, or a registered prover or evaluatable answers one, not only a
-  believed fact, and a computed relation is a legal antecedent. The documentation had
-  understated the reach. A new `solve_context_test` case pins that a constraint body reaches
-  a prover. *Class:* **Fix**. [docs/solving.md](docs/solving.md)
-
-- **The vocabulary load and the minting-assert path drop a redundant settle and two
-  redundant declaration reads.** The CxCore and starter loaders wrap their bodies in
-  `with-deferred-settle`, so the JTMS settles once at the end rather than once per asserted
-  sentence, measured at roughly 200 ms off the starter load on the memory backend.
-  `constraining-predicates` stops seeding an undeclared predicate — a mint's own type
-  functor — into its result, dropping the per-assert match walk that returned nothing,
-  measured at the CxCore load falling from 327 ms to 272 ms with assertive argument types
-  on. The first-level materializer skips the definitional constraint re-check when the
-  assert-path entailment check already ran it, threaded through a `pre-checked?` flag, while
-  the deeper cascade levels and the retroactive sweeps still run the re-check;
-  `assert_cost_test` re-pins the read counts down. `cascade-clash` builds the disjointness
-  separation frame once and applies its closure per candidate, where it had rebuilt the
-  frame inside a filter, and `perf`'s `disjoint-clique-membership` and
-  `disjoint-metatype-membership` claims guard the result at linear in member count.
-  *Class:* neither label — the prior path and the new one compute the same belief,
-  justification set and stored-sentex fingerprint, so only the load and assert latency move.
-
-- **A script renders the upper-ontology `genl` hierarchy to one SVG.**
-  `scripts/ontology-graph.py` reads the `resources/kb/*.txt` authoring files and emits a
-  layered is-a diagram — one node per type in the `genl` hierarchy, one edge per
-  `(genl sub super)` — with node fill set by the context a term is defined in and edge color
-  by the context the edge is written in, and it needs no KB boot. It draws through Graphviz
-  `dot` when `dot` is on the path and falls back to a dependency-free layout otherwise.
-  `--engine` selects among `dot`, `gridfold`, `icicle` and `dendrogram`, `--ratio` sets the
-  sheet aspect, and `--text-scale` sets the label point size independently of `--ratio`.
-  *Class:* **Additive**.
+*Breaks:* `:counters?`, `:believed?`, `:max-cost`, `:max-depth`, `:max-term-growth`, `add-evaluatable`, `assert-inert`, `describe`, `why-not`, `spatial_thing`, `temporal_thing`
 
 ## 0.18.0 — 2026-09-09 — "declarations that mint the types they constrain, and rules that forward-chain only when asked"
 

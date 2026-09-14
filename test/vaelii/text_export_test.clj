@@ -55,7 +55,7 @@
   [kb form]
   (cond
     (sx/sentex-handle? form) (let [t (v/sentex kb (sx/handle-id form))]
-                               (if t (list 'namedSentex (:sentence t) (:context t)) form))
+                               (if t (list 'namedSentex (v/sentence-of t) (:context t)) form))
     (sequential? form)       (apply list (map #(resolve-handles kb %) form))
     :else                    form))
 
@@ -71,7 +71,7 @@
   and which therefore sits in `CxCore` in a KB built that way and in `CxUniverse` in any
   KB that loads it afterwards."
   [kb sx]
-  (let [s (resolve-handles kb (:sentence sx))
+  (let [s (resolve-handles kb (v/sentence-of sx))
         f (when (sequential? s) (first s))]
     (cond-> [s (if (and (symbol? f) (v/has-prop? kb :forced-decontextualized f))
                  ::anywhere

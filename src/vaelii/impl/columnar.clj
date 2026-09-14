@@ -851,6 +851,16 @@
   (let [{:keys [dict trie roots]} (state-for space)]
     (->ColumnarIndexStore dict trie roots (kv/->KvIndexStore roots))))
 
+(defn drop-state-space!
+  "Forget the {dict, trie, roots} state held under `space` — the columnar twin of
+  `vaelii.impl.memory/drop-index-space!`, `core/close!`'s release of the RAM index a
+  disk-backed KB derived.  A no-op for a `space` nothing holds; returns true when an entry
+  was dropped."
+  [space]
+  (let [had? (contains? @state-spaces space)]
+    (swap! state-spaces dissoc space)
+    had?))
+
 (defn compact!
   "Freeze a columnar index store's trie into read-optimized CSR arrays — the mutable
   node-linked graph collapses to flat parallel `int` arrays with no per-node objects.

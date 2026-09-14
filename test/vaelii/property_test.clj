@@ -149,9 +149,9 @@
      ;; a stored sentex is not a believed one (README.md, "Belief filtering").  So this
      ;; counts neither records nor handles — it is the sentences believed, and asserted.
      :believed-set       (into #{} (comp (filter #(v/in? kb %))
-                                         (map #(:sentence (v/sentex kb %))))
+                                         (map #(v/sentence-of (v/sentex kb %))))
                                (tu/sentex-ids kb))
-     :premise-set        (into #{} (map #(:sentence (v/sentex kb %)))
+     :premise-set        (into #{} (map #(v/sentence-of (v/sentex kb %)))
                                (tu/premise-ids kb))}))
 
 (defn- believed-handles

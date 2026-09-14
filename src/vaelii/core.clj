@@ -49,6 +49,7 @@
             [vaelii.impl.naming :as nm]
             [vaelii.impl.nat :as nat]
             [vaelii.impl.observe :as observe]
+            [vaelii.impl.oplog :as oplog]
             [vaelii.impl.opts :as opts]
             [vaelii.impl.overlay.mount :as mount]
             [vaelii.impl.plan :as plan]
@@ -63,6 +64,7 @@
             [vaelii.impl.recovery :as recovery]
             [vaelii.impl.reindex :as reindex]
             [vaelii.impl.resolution :as res]
+            [vaelii.impl.rete :as rete]
             [vaelii.impl.rules :as rules]
             [vaelii.impl.scenario :as scenario]
             [vaelii.impl.sentex :as sx]
@@ -148,7 +150,25 @@
   The KB value's slots — the prover registry, the solver, the ledgers, the caches — are
   documented on the record in `vaelii.impl.kb`."
   ([] (open-kb {}))
-  ([opts] (kb/open-kb opts recover reindex)))
+  ([opts]
+   ;; A throw *after* the durable stores resolve — a stale-index refusal, a `:pg` identity
+   ;; mismatch, a `recover` over a corrupt store — returns no KB, so the exclusive lock
+   ;; those stores took would be held for the JVM's life with nothing to release it.  Snapshot
+   ;; which of this KB's directories are already open (a healthy KB may share one — `store-for`
+   ;; keys stores per canonical path), construct, and on a throw close only the directories
+   ;; *this* call newly opened.  `store-for` already releases a lock its own component-open
+   ;; throws under; this covers the gap where one component opened and a later step threw.
+   (let [dirs (kb/durable-dirs opts)
+         pre  (into #{} (filter #(seq (disk/opened %))) dirs)]
+     (try
+       (recovery/register-fresh-store! (kb/open-kb opts recover reindex))
+       (catch Throwable t
+         (doseq [d dirs :when (and (not (contains? pre d)) (seq (disk/opened d)))]
+           (try (disk/close-dir! d)
+                ;; best-effort: the construction failure `t` is what the caller needs, and a
+                ;; release that itself throws must not replace it
+                (catch Throwable _ nil)))
+         (throw t))))))
 
 (defn fork
   "A private, writable KB over this one's stores — a **fork**.  Reads resolve fork-first
@@ -1527,7 +1547,7 @@
       (let [ents (when-not *bulk-load?*
                    (nm/check! (:naming kb) sentence context)
                    (checks/check-ground kb sentence context)
-                   (when-let [ps (seq (special/wff-problems (:taxonomy kb) sentence))]
+                   (when-let [ps (seq (special/wff-problems (:taxonomy kb) sentence context))]
                      (throw (ex-info (str "not well-formed: " (str/join "; " ps))
                                      {:type :not-well-formed :sentence sentence})))
                    ;; the rule-set half of well-formedness, for the *other* thing that can
@@ -1546,8 +1566,21 @@
             ;; existing sentex, so `create-sentex` directly is the same result the
             ;; `find-or-create` miss branch would take.
             ;; the record is born carrying its strength, so `mark-premise` below has
-            ;; nothing to re-store — see `kb/create-sentex`
-            [h s _]  (if *bulk-load?*
+            ;; nothing to re-store — see `kb/create-sentex`.
+            ;;
+            ;; **A symmetric predicate keeps the probe.**  `create-sentex` canonicalizes
+            ;; the arguments (`res/kb-sentex` sorts a `(symmetric P)` literal), so the bulk
+            ;; row is *stored* in canonical order — but skipping the probe stored it beside
+            ;; a mirror already there, two records for one proposition, which the caller
+            ;; cannot pre-dedup: telling `(siblingOf Bob Ann)` from a stored
+            ;; `(siblingOf Ann Bob)` needs exactly the `(symmetric P)` read the fast path
+            ;; is avoiding.  So for a symmetric functor the row takes `find-or-create` (one
+            ;; taxonomy read per row for a rare mark), which is what makes the bulk result
+            ;; identical to loading one-by-one (`integrate/symmetrize-existing`, vaelii#61).
+            ;; The `has-prop?` read is inside the `*bulk-load?*` `and`, so `and` short-
+            ;; circuits it away on the non-bulk path, which never reaches it.
+            [h s _]  (if (and *bulk-load?*
+                              (not (and pred (tax/has-prop? (:taxonomy kb) :symmetric pred))))
                        (let [[h s] (kb/create-sentex kb sentence context strength)] [h s true])
                        (kb/find-or-create-sentex kb sentence context strength))]
         (mark-premise kb h strength)
@@ -2104,12 +2137,14 @@
          ;; unless the KB declares a context_denoting_function and this is a ground one.
          context  (nat/maybe-reify-context kb context)
          sentence (apply-direction-opt sentence opts)
-         ;; An `(asp/atMost k ?v pattern)` / `(asp/atLeast …)` cardinality bound is
-         ;; rewritten to the constraint rule it is — `(set/hardConstraint (implies
-         ;; pattern (cardAtMost k ?v)))` — before anything reads its shape, so the split,
-         ;; the checks and the store all see an ordinary constraint rule (docs/solving.md).
-         ;; The identity on every other sentence.
-         sentence (rules/normalize-cardinality sentence)
+         ;; The answer-set surface forms — an `(asp/atMost k ?v pattern)` / `(asp/atLeast …)`
+         ;; cardinality bound, an `(asp/minimize p ?w body)` objective, and a priority-tagged
+         ;; `(set/softConstraint p (implies …))` — are rewritten to the constraint rules they
+         ;; are (a `set/hardConstraint`/`set/softConstraint` whose consequent marker carries
+         ;; the operands) before anything reads their shape, so the split, the checks and the
+         ;; store all see ordinary constraint rules (docs/solving.md).  The identity on every
+         ;; other sentence.
+         sentence (rules/normalize-solve-surface sentence)
          ;; `(exceptWhen (set/monotonic <query>) <rule>)` states the **exception's** own
          ;; defeat class, which one `opts` cannot: it reaches both halves, so the pairing
          ;; a known-true exception makes with a default rule had no spelling at all
@@ -2287,13 +2322,14 @@
   (or (some-> (context-shape-problem kb context) vector)
       (some-> (problem (fn [] (check-assert-opts! opts))) vector)
       (some-> (sentence-shape-problem sentence) vector)
-      ;; A malformed `(asp/atMost …)` / `(asp/atLeast …)` surface is reported here, as a
-      ;; returned problem, so `check` predicts the `:not-well-formed` refusal `assert`
-      ;; throws when it normalizes the bound rather than throwing out of `check` itself.
-      ;; `normalize-cardinality` throws on a bad bound and is the identity on every other
-      ;; sentence, so `problem` catches the throw and this is nil unless the sentence is a
-      ;; cardinality surface with a bad count, counted slot, or arity.
-      (some-> (problem (fn [] (rules/normalize-cardinality sentence))) vector)
+      ;; A malformed answer-set surface (`asp/atMost` / `asp/atLeast` / `asp/minimize`, or a
+      ;; priority-tagged `set/softConstraint`) is reported here, as a returned problem, so
+      ;; `check` predicts the `:not-well-formed` refusal `assert` throws when it normalizes
+      ;; the form rather than throwing out of `check` itself.  `normalize-solve-surface`
+      ;; throws on a bad bound/priority/weight and is the identity on every other sentence,
+      ;; so `problem` catches the throw and this is nil unless the sentence is one of those
+      ;; surfaces, malformed.
+      (some-> (problem (fn [] (rules/normalize-solve-surface sentence))) vector)
       (some-> (connective-shape-problem sentence) vector)
       (some-> (disjunction-shape-problem sentence) vector)
       (some-> (quantity-shape-problem sentence) vector)
@@ -2314,7 +2350,7 @@
          {:type :naming :sentence sentence :context context
           :message (str "naming invariant: " p)})
       #(some-> (problem (fn [] (checks/check-ground kb sentence context))) vector)
-      #(for [p (special/wff-problems (:taxonomy kb) sentence)]
+      #(for [p (special/wff-problems (:taxonomy kb) sentence context)]
          {:type :not-well-formed :sentence sentence :message (str "not well-formed: " p)})
       #(some-> (problem (fn [] (checks/check-edge-stratified kb sentence context))) vector)
       #(some-> (problem (fn [] (checks/check-closed-extent-stratified kb sentence context))) vector)
@@ -2456,7 +2492,7 @@
        ;; `shape-problems` above answered for a malformed cardinality bound, and
        ;; `direction-opt-problem` and `exception-strength-problem` for the other two.
        (let [sentence (apply-direction-opt sentence opts)
-             sentence (rules/normalize-cardinality sentence)
+             sentence (rules/normalize-solve-surface sentence)
              sentence (first (sx/peel-exception-strength sentence))]
          (cond
            (sx/do-form? sentence)
@@ -2718,7 +2754,11 @@
                         ;; is the documented state an aborted batch leaves behind.
                         (when outermost# (tax/restore-depths (:taxonomy kb#)))
                         (throw t#)))]
-     (when outermost# (settle/settle kb#))
+     ;; the closing settle is a write of its own: on a KB with an operation log it is
+     ;; recorded as a `:settle` frame after the batch's writes (`vaelii.impl.oplog`)
+     (when outermost#
+       (oplog/run-op kb# :settle :replay [] (constantly nil)
+                     (fn [_#] (settle/settle kb#))))
      res#))
 
 (defn assert-many
@@ -2749,10 +2789,12 @@
   work only validates or dedups; it never changes what is stored.  The caller owns the
   two preconditions the mode trades on: every fact is well-formed (the checks would
   have passed) and no two are the same **canonical** sentence in the same context (the
-  dedup would have missed) — the two spellings of a symmetric literal are one sentence,
-  so `(siblingOf Ann Bob)` beside `(siblingOf Bob Ann)` is a duplicate here and stores
-  two records for one proposition.  Use plain `assert` / `assert-many` when either is
-  in doubt.
+  dedup would have missed).  The one canonicalization the caller cannot pre-compute — a
+  symmetric literal against its stored mirror, since telling `(siblingOf Bob Ann)` from a
+  stored `(siblingOf Ann Bob)` needs the `(symmetric P)` mark — this path still dedups: a
+  symmetric functor keeps the trie probe (one taxonomy read per row), so a mirror resolves
+  to the one stored handle rather than a second record.  Use plain `assert` / `assert-many`
+  when the well-formedness or the plain-distinctness precondition is in doubt.
 
   `opts` flows to each `assert` (e.g. `:strength :monotonic`); `:chain?` is forced
   false — a rule/consequent that needs forward firing is not a bulk-fact load.
@@ -2931,7 +2973,7 @@
 ;; closed-world readers run the registry from inside a relabel loop.
 ;;
 ;; Result shapes differ by family: `sentexes-matching` and the extent/term readers return
-;; **sentex maps** (`{:id :sentence :context :polarity ...}`); `query` / `ask` / `prove`
+;; **sentex maps** (`{:id :sentence :context ...}`); `query` / `ask` / `prove`
 ;; return **binding maps** (`{?x val ...}`); `lookup` returns
 ;; **level-result maps** (`{:level :handle :sentence :context :bindings}`).
 
@@ -3243,8 +3285,8 @@
   `sentex`/`find-sentexes` for raw introspection.
 
   Returns a seq of **sentex maps**.  The stable contract is the map keys — `:id`
-  (the handle), `:sentence`, `:context`, `:polarity`, and for a rule `:antecedent` /
-  `:consequent` / `:direction` — so key into the result.  The concrete record type
+  (the handle), `:sentence` (a negative literal's is `(not S)`), `:context`, and for a
+  rule `:antecedent` / `:consequent` / `:direction` — so key into the result.  The concrete record type
   (`vaelii.impl.sentex/LiteralSentex` / `RuleSentex`) is an internal detail: do not `instance?`-
   test it or rely on it, only its keys.
 
@@ -3359,9 +3401,13 @@
   literal holding a variable would answer a `CxEverything` read as a fact.  An
   `(ist Ctx S)` sentence stores S in Ctx, as `assert` does; stored as written, the `ist`
   form is a record no read resolves, since every read takes the form apart first.  A
-  **rule** is refused (`:not-indexable`) — a labeling labels atoms, and the reason is
-  below.  `assert-inert` is additive, so no `!`; drop it with `retract!` on the returned
-  handle.
+  ground reifiable NAT is resolved to its stored constant first (dedup, never mint), as
+  `handle-of` and `sentexes-matching` resolve one, so the inert record keys on the atomic
+  form every read reifies to rather than the compound none of them do; a NAT with no
+  stored constant is refused (`:unminted-nat`), since minting a `termOfUnit` is a belief-
+  carrying side effect this entry point never has.  A **rule** is refused
+  (`:not-indexable`) — a labeling labels atoms, and the reason is below.  `assert-inert`
+  is additive, so no `!`; drop it with `retract!` on the returned handle.
 
   A KB whose derived state was never built refuses this exactly as it refuses `assert`
   (`:unrecovered-kb`).  Not premising is what makes an inert sentex harmless to belief;
@@ -3416,7 +3462,22 @@
                              " set/inertRule (or {:direction :inert}), which is the other"
                              " inertness: the rule is believed and never fires")
                         {:type :not-indexable :sentence sentence :context context})))
-      (first (kb/find-or-create-sentex kb sentence context)))))
+      ;; Store the read-mode reify (dedup, never mint), so an inert record of a NAT-
+      ;; bearing sentence keys on the same constant `assert`, `handle-of` and
+      ;; `sentexes-matching` all resolve to.  Stored raw it was a compound no belief-
+      ;; filtered read reifies to — invisible to `sentexes-matching` and `ask`, and beside
+      ;; the twin a later `assert` mints, so `count-with-functor` answered 2 for one
+      ;; proposition.  A NAT with no stored constant is refused (`:unminted-nat`): minting
+      ;; asserts a `termOfUnit` premise, the belief-carrying side effect this entry point
+      ;; never has, and a labeling materializes atoms that already exist so it never lands
+      ;; here (`nat/resolve-for-read`).
+      (if-let [reified (nat/resolve-for-read kb sentence)]
+        (first (kb/find-or-create-sentex kb reified context))
+        (throw (ex-info (str "a reifiable NAT with no stored constant cannot be stored"
+                             " inert: " (pr-str sentence) " names a term this KB has not"
+                             " minted, and assert-inert never mints — assert the NAT-bearing"
+                             " fact first (which mints), or materialize the atom that exists")
+                        {:type :unminted-nat :sentence sentence :context context}))))))
 
 (defn contexts-of
   "The contexts in which `sentence` is stored **and believed** — a read through
@@ -4279,7 +4340,12 @@
   candidates for a missing `disjoint` assertion."
   ([kb] (disjointness-audit kb 'CxUniverse))
   ([kb context]
-   (let [ts   (vec (sort (types kb)))
+   ;; `by-print-key`, never bare `sort`: a type node need not be a symbol.  A NAT — a
+   ;; function term standing for a collection an imported ontology has no atomic name for —
+   ;; is a list, and `compare` throws on one rather than ordering it, so the N² sweep threw
+   ;; a bare `ClassCastException` on such a KB.  `disjoint-line` orders the same nodes the
+   ;; same way.
+   (let [ts   (vec (nm/by-print-key (types kb)))
          n    (count ts)
          data (persistent!
                (reduce
@@ -5722,7 +5788,7 @@
         ;; the premise is evidence again, so every exception it bears on is a
         ;; question again — the mirror of the queueing the suspension did
         (when-let [sx (p/get-sentex records h)]
-          (special/recheck-on-sentence kb (:sentence sx))))
+          (special/recheck-on-sentence kb (sx/sentence-of sx))))
       (doseq [[h {:keys [premise? strength]}] @audit
               :when (not (held h))]
         (cond
@@ -6009,7 +6075,7 @@
 
 (defn sentex
   "The sentex for a handle as a **map**, or nil.  Same shape contract as `sentexes-matching`'s
-  elements: `:id` (the handle), `:sentence`, `:context`, `:polarity`, and for a rule
+  elements: `:id` (the handle), `:sentence`, `:context`, and for a rule
   `:antecedent` / `:consequent` / `:direction` / `:defeasible`.  Key into it; the
   concrete `vaelii.impl.sentex/LiteralSentex` / `RuleSentex` record class is internal and not
   part of the contract.  nil (`handle-of` of an absent sentence) answers nil; a
@@ -6023,15 +6089,22 @@
   counterpart of `sentex`.  It is built through the store's own constructor, so a symmetric
   predicate's arguments are sorted against this KB's taxonomy, comparisons are folded, and
   variables are renamed to canonical form: the exact form `assert` would key on.  Same map
-  shape and contract as `sentex` (`:sentence` / `:context` / `:polarity`; key into it, the
+  shape and contract as `sentex` (`:sentence` / `:context`; key into it, the
   record class is internal), but with no `:id`, since nothing was written.
 
   For turning a sentence into its content identity — a stable key or content-address that
   is a function of the assertion, not of whether or where it landed — independent of a
   handle: `(canonical-sentex kb S C)` digests to the same value on every KB that shares the
-  taxonomy, whereas `sentex` needs the sentence to already be stored."
+  taxonomy, whereas `sentex` needs the sentence to already be stored.
+
+  A ground reifiable NAT is resolved to its stored constant first (dedup, never mint), so
+  the result agrees with `handle-of` and the key `assert` stored the sentence under.  A
+  NAT this KB has not minted has **no canonical stored form yet** — `assert` would mint a
+  fresh constant, which this function cannot without a side effect — so the compound is
+  returned unchanged, and the digest of two KBs agrees only once both have minted it.  A
+  KB that declares no `reifiable_function` pays nothing for this (`nat/resolve-for-read`)."
   [kb sentence context]
-  (res/kb-sentex kb sentence context))
+  (res/kb-sentex kb (or (nat/resolve-for-read kb sentence) sentence) context))
 
 (defn justification
   "The justification for an id, or nil — nil in, nil out; a non-id is refused
@@ -6065,9 +6138,9 @@
   which builds that key **once per justification** and short-circuits below two.
 
   Both properties pay for themselves here.  Each key build is a `get-sentex` per antecedent
-  plus the structural key it assembles, and a **rule handle is an antecedent of every
-  justification it licenses**, so `dependent-justifications` on one lists that rule's
-  entire firing history: at 100k firings the decorated sort pays 100k key builds against
+  plus the structural key it assembles, and **the TMS lists every justification a rule
+  licenses under the rule's node** (`jtms/rests-on`), so `dependent-justifications` on a
+  rule lists its entire firing history: at 100k firings the decorated sort pays 100k key builds against
   the ~3.3M a per-comparison key fn would, and the store lookups behind them fall by the
   same factor.  And a derived fact usually rests on **one** justification, so the whole
   content key is pure overhead on every hop of a proof walk (`why`, w10 retrieval,
@@ -6346,7 +6419,7 @@
         body (fn [s] (if (and (sequential? s) (= 'not (nm/functor s))) (second s) s))
         rows (->> (take describe-scan seen)
                   (filter #(visible-here? kb % context))
-                  (keep #(nm/functor (body (:sentence %))))
+                  (keep #(nm/functor (body (sx/sentence-of %))))
                   frequencies
                   (map (fn [[p n]] {:predicate p :count n})))]
     (bounded-rows rows :predicate limit (not cut?))))
@@ -6492,8 +6565,17 @@
   [sx]
   (when sx
     (if-let [vm (:varmap sx)]
-      (sx/originalize (:sentence sx) vm)
-      (:sentence sx))))
+      (sx/originalize (sx/sentence-of sx) vm)
+      (sx/sentence-of sx))))
+
+(defn sentence-of
+  "A sentex map's canonical sentence: a literal's `:sentence`, or for a rule the
+  `(implies <antecedent> <consequent>)` form built from its `:antecedent` and
+  `:consequent` — a rule map carries no `:sentence` of its own.  The variables are the
+  canonical `?var0 ?var1 …`; `readable-sentence` gives the author's names instead.  nil
+  in, nil out."
+  [sx]
+  (when sx (sx/sentence-of sx)))
 
 (defn- opposite-sentence
   "The literal that directly contradicts `sentence`: its negation, or — if it is
@@ -6573,12 +6655,9 @@
                     justs  (mapv (fn [j]
                                    (let [inf   (:informant j)
                                          rule? (integer? inf)
-                                         ;; the rule handle is an antecedent of every
-                                         ;; justification it licenses, so it would
-                                         ;; otherwise recur as one of the "facts" — lift
-                                         ;; it out and report it as the rule
-                                         antes (if rule? (remove #(= inf %) (:antecedents j))
-                                                   (:antecedents j))]
+                                         ;; the record names the rule in `:informant`
+                                         ;; alone, so the antecedents are the facts
+                                         antes (:antecedents j)]
                                      {:justification (:id j)
                                       :informant     inf
                                       :strength      (:strength j :monotonic)
@@ -6670,7 +6749,7 @@
              ;; spelling this context never elected and `:handle` misses, while the
              ;; `:rewrites` map beside them is the correct scoped one, and the report
              ;; contradicts itself (docs/equality.md's context-scoped supersession).
-             :superseded-by (let [r (kb/rewrite-goal kb (:sentence sx) (:context sx))]
+             :superseded-by (let [r (kb/rewrite-goal kb (sx/sentence-of sx) (:context sx))]
                               {:sentence r
                                :handle   (kb/find-sentex-handle kb r (:context sx))
                                :rewrites (jtms/supersession (:tms kb) handle)}))
@@ -6680,7 +6759,7 @@
              ;; order it happens to yield moves with the retrieval sweeps.  Printed
              ;; through `nm/print-key`, so an ambient `*print-length*` cannot elide two
              ;; long opposing sentences to one prefix and put the reading back on that set
-             :contradicted-by (->> (sentexes-matching kb (opposite-sentence (:sentence sx)) '?ctx)
+             :contradicted-by (->> (sentexes-matching kb (opposite-sentence (sx/sentence-of sx)) '?ctx)
                                    (nm/sort-by-content-key (juxt #(nm/print-key (:sentence %))
                                                                  #(str (:context %)))
                                                            compare)
@@ -6693,7 +6772,7 @@
              :support (vec (for [j (supporting-justifications kb handle)]
                              {:justification (:id j)
                               :informant (:informant j)
-                              :missing   (vec (remove #(in? kb %) (:antecedents j)))}))))))
+                              :missing   (vec (remove #(in? kb %) (jtms/rests-on j)))}))))))
 
 (defn- excepted-argument
   "The argument for `sentence` in `context` that some excepted rule built and then
@@ -6733,7 +6812,7 @@
              except (provers/rule-exceptions kb rh)
              :when (chain/exception-holds? kb except bindings context)]
          (let [ground (mapv #(sx/canon (res/substitute % bindings)) except)]
-           [[(:sentence rsx) ground
+           [[(sx/sentence-of rsx) ground
              (mapv #(:sentence (p/get-sentex (:records kb) %)) handles)]
             {:rule rh
              :exception (if (= 1 (count ground)) (first ground) ground)
@@ -7011,11 +7090,8 @@
           rule? (integer? inf)]
       (cond-> {:informant   inf
                :strength    (:strength j :monotonic)
-               ;; the rule handle is an antecedent of every justification it licenses,
-               ;; so lift it out and report it as the rule rather than as a fact
-               :antecedents (mapv #(readable-sentence (sentex kb %))
-                                  (cond->> (:antecedents j)
-                                    rule? (clojure.core/remove #(= inf %))))}
+               ;; the record names the rule in `:informant` alone, reported as `:rule`
+               :antecedents (mapv #(readable-sentence (sentex kb %)) (:antecedents j))}
         rule? (assoc :rule (readable-sentence (sentex kb inf)))))))
 
 (defn- diff-order
@@ -7167,7 +7243,7 @@
              ;; was the only evidence for would never be re-asked and the rule it
              ;; blocks would never fire again
              (when-let [sx (p/get-sentex (:records kb) h)]
-               (special/recheck-on-sentence kb (:sentence sx)))))
+               (special/recheck-on-sentence kb (sx/sentence-of sx)))))
          ;; No re-chain seeds: a preview suspends rather than retracts, so no `genl` or
          ;; `genlCx` sentex left the store and no subsumption or sighting lost its named
          ;; witness to a removal.  A *suspended* one still deactivates the edge, and the
@@ -7363,7 +7439,7 @@
   (when-let [sx (p/get-sentex (:records kb) handle)]
     (let [any? (sx/variable? context)]
       (when (or any? (sees? kb context (:context sx)))
-        (when-let [b (res/match1 kb goal (:sentence sx) (when-not any? context))]
+        (when-let [b (res/match1 kb goal (sx/sentence-of sx) (when-not any? context))]
           (cond-> b any? (assoc context (:context sx))))))))
 
 (defn- watch-goal-problem
@@ -7460,9 +7536,12 @@
             ;; into whatever sink the *original* caller bound, so an
             ;; `edit-with-consequences` would report a listener's assertions as
             ;; consequences of the batch.  A listener's writes are its own; the sinks are
-            ;; closed for the duration and reopen for the caller's next settle.
+            ;; closed for the duration and reopen for the caller's next settle.  A write a
+            ;; listener makes lands inside the operation whose settle this is, so it marks
+            ;; the KB's operation log unusable (`vaelii.impl.oplog`).
             (binding [settle/*touched-sink*    nil
-                      settle/*touched-in-sink* nil]
+                      settle/*touched-in-sink* nil
+                      oplog/*listener?*        true]
               (doseq [l ls] (notify-listener! kb l added removed entries)))))))))
 
 (defn watch
@@ -7707,10 +7786,33 @@
   holds a JDBC connection rather than a directory — releases its resource here too: any
   record store that is `java.io.Closeable` is closed.  The disk store is torn down by
   `close-dir!` above and is not `Closeable`, so this fires once, for such a backend, and
-  never twice."
+  never twice.
+
+  **What holding a KB open costs, and what this releases.**  A durable KB holds the
+  directory's exclusive lock and its file handles until this runs; an in-memory KB holds
+  its records in a process-global space registry keyed by its `:space`, shared with any
+  other KB over that space and released by `clear!`, not here.  A **disk-backed KB with a
+  derived index** (`:disk-dense`, `:disk-columnar`, `:disk-memory`) also holds that index
+  in a RAM registry keyed by the directory; this drops it, so a process opening durable KBs
+  in a loop does not keep one derived index per directory it has finished with (the index
+  is rebuilt from the records on the next open regardless).  A KB driven through the
+  incremental matcher (`rete/track!` or `VAELII_RETE=1`) holds a RAM alpha index too; this
+  drops it (`rete/forget-kb!`) for any backend, and that registry keys each KB weakly, so a
+  KB dropped without `close!` is reclaimed by GC and its alpha with it — the drop here is
+  the prompt release, not the only one."
   [kb]
+  ;; the RAM caches first, and unconditionally: they are dropped for every backend (an
+  ;; in-memory KB has no directory to close but can still have been tracked or hold a
+  ;; derived index), and they hold only RAM, so releasing them cannot fail the close of the
+  ;; durable half below.  The alpha index the incremental matcher held, and the RAM derived
+  ;; index a disk-backed KB built (nil unless the index was derived and the records durable).
+  (rete/forget-kb! kb)
+  (kb/release-index-space! (:index-space kb))
   (when-let [dir (:dir kb)]
     (disk/close-dir! dir))
+  ;; after the directory's close, whose image writer seals a KB that records an operation
+  ;; log (`vaelii.impl.seal`) and so still appends to it
+  (some-> (:oplog kb) oplog/close-log!)
   (when (instance? java.io.Closeable (:records kb))
     (.close ^java.io.Closeable (:records kb)))
   kb)
@@ -7764,7 +7866,9 @@
   `import!`.
 
   `opts`: `{:variant :records|:records+index :compression :gzip|:xz|:none :chunk-size n
-  :provenance? bool :on-progress f}` (defaults `:records`, `:gzip`, 10000, true).
+  :provenance? bool :belief? bool :on-progress f}` (defaults `:records`, `:gzip`, 10000,
+  true, true).  `:belief? true` also writes the KB's belief image, which an import of the
+  same records installs in place of `recover` ([docs/storage.md](docs/storage.md)).
   `:records+index` writes the index too, as a cache a reader replays only if it can prove
   it describes the records beside it.  `:provenance? false` drops the per-handle
   annotation — an open map with no size bound, measured at 57% of the converted engine
@@ -7899,7 +8003,7 @@
   [kb]
   (keep (fn [h]
           (when-let [sx (sentex kb h)]
-            {:sentence  (:sentence sx)
+            {:sentence  (sx/sentence-of sx)
              :context   (:context sx)
              :strength  (:strength sx)
              :premise?  (premise? kb h)
@@ -8144,6 +8248,97 @@
        :else (if-let [resolved (argue-resolve-contradiction kb asent context)]
                (assoc base :verdict resolved)
                (assoc base :verdict :contradiction))))))
+
+;; ---- the operation log ----------------------------------------------------
+;; Every public write entry point above is routed through `vaelii.impl.oplog/run-op`, so a
+;; KB with an operation log records each outermost write as the call that made it.  The
+;; routing wraps the vars rather than each body: an entry point added above and missing
+;; from `write-ops` is a write the log does not record.
+
+(defn- op-inputs
+  "What a frame records beyond an operation's arguments: the clock `:created` is stamped
+  from, the creator, and the dynamic bindings that change what a write stores.  An
+  `abduce` also records the token its scratch context is named by."
+  [op]
+  (cond-> {:clock                (*clock*)
+           :creator              *creator*
+           :bulk-load?           *bulk-load?*
+           :write-unrecovered?   *write-unrecovered?*
+           :defer-settle?        *defer-settle?*
+           :defer-depths?        tax/*defer-depths?*
+           :assertive-arg-types? checks/*assertive-arg-types?*
+           :arbitrate?           checks/*arbitrate-constraints?*
+           :sweep?               settle/*sweep?*}
+    (= :abduce op) (assoc :token (abduce/new-token))))
+
+(defn- with-op-inputs
+  "Run `thunk` with the bindings `inputs` records, or under the bindings in force when
+  `inputs` is nil — which is how a write nested inside a recorded operation runs."
+  [inputs thunk]
+  (if (nil? inputs)
+    (thunk)
+    (binding [*clock*                         (constantly (:clock inputs))
+              *creator*                       (:creator inputs)
+              *bulk-load?*                    (:bulk-load? inputs)
+              *write-unrecovered?*            (:write-unrecovered? inputs)
+              *defer-settle?*                 (:defer-settle? inputs)
+              tax/*defer-depths?*             (:defer-depths? inputs)
+              checks/*assertive-arg-types?*   (:assertive-arg-types? inputs)
+              checks/*arbitrate-constraints?* (:arbitrate? inputs)
+              settle/*sweep?*                 (:sweep? inputs)
+              abduce/*token*                  (:token inputs)]
+      (thunk))))
+
+(defn- logged
+  "Write entry point `g`, routed through the operation log as `op` of `class`.  A KB with
+  no log calls `g` directly."
+  [op class g]
+  (fn [kb & args]
+    (if (nil? (:oplog kb))
+      (apply g kb args)
+      (oplog/run-op kb op class (vec args) #(op-inputs op)
+                    (fn [inputs] (with-op-inputs inputs #(apply g kb args)))))))
+
+(def ^:private write-ops
+  "Every public write entry point, as `var -> [op class]`.  The classes are
+  `vaelii.impl.oplog`'s: `:replay` is recorded, `:seal` and `:config` mark the log
+  unusable."
+  {#'assert                   [:assert :replay]
+   #'assert-rule              [:assert-rule :replay]
+   #'assert-many              [:assert-many :replay]
+   #'bulk-assert-facts!       [:bulk-assert-facts :replay]
+   #'assert-inert             [:assert-inert :replay]
+   #'add-provenance           [:add-provenance :replay]
+   #'forward-chain            [:forward-chain :replay]
+   #'register-modal-predicate [:register-modal-predicate :replay]
+   #'retract!                 [:retract :replay]
+   #'edit!                    [:edit :replay]
+   #'edit-with-consequences!  [:edit-with-consequences :replay]
+   #'preview                  [:preview :replay]
+   #'abduce                   [:abduce :replay]
+   #'abduce-discard!          [:abduce-discard :replay]
+   #'clear-violations!        [:clear-violations :replay]
+   #'import!                  [:import :seal]
+   #'clear!                   [:clear :seal]
+   #'recover                  [:recover :seal]
+   #'reindex                  [:reindex :seal]
+   #'load-text!               [:load-text :seal]
+   #'set-solver               [:set-solver :config]
+   #'add-prover               [:add-prover :config]
+   #'add-evaluatable          [:add-evaluatable :config]
+   #'add-reasoner             [:add-reasoner :config]})
+
+(doseq [[v [op class]] write-ops]
+  (alter-var-root v (fn [g] (logged op class g))))
+
+;; What `oplog/replay!` runs a frame through: each operation's entry point, plus the closing
+;; settle of a `with-deferred-settle` batch, which is recorded without an entry point of its
+;; own.
+(oplog/install-dispatch!
+ (assoc (into {} (map (fn [[v [op _]]] [op v])) write-ops)
+        :settle (fn [kb]
+                  (oplog/run-op kb :settle :replay [] (constantly nil)
+                                (fn [_] (settle/settle kb))))))
 
 (defn -main
   "`lein run` — open a KB on the configured stores, say which ones answered, and

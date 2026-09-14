@@ -55,8 +55,8 @@
     (let [rsx (p/get-sentex (:records kb) h)]
       {:rule h
        :sentence (when rsx (if-let [vm (:varmap rsx)]
-                             (sx/originalize (:sentence rsx) vm)
-                             (:sentence rsx)))})))
+                             (sx/originalize (sx/sentence-of rsx) vm)
+                             (sx/sentence-of rsx)))})))
 
 (defn report
   "Append dropped-conclusion entries to the accumulating ledger, stamped with the

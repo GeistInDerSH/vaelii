@@ -147,7 +147,7 @@
         (testing (str wrapper " sets :direction " expected)
           (is (= expected (:direction s))))
         (testing "and the wrapper itself is not stored — the sentence is the bare rule"
-          (is (= 'implies (first (:sentence s))))
+          (is (= 'implies (first (v/sentence-of s))))
           (is (some? (:antecedent s))))))))
 
 (tu/deftest-kb the-default-wrapper-sets-defeasible-on-the-record
@@ -157,7 +157,7 @@
                       'CxUniverse)
           s (v/sentex kb h)]
       (is (true? (:defeasible s)))
-      (is (= 'implies (first (:sentence s))))
+      (is (= 'implies (first (v/sentence-of s))))
       (testing "and it still behaves as a default — the conclusion is defeasible"
         (v/assert kb (list bird Tweety) 'CxUniverse)
         (is (seq (v/sentexes-matching kb (list flies Tweety) 'CxUniverse)))

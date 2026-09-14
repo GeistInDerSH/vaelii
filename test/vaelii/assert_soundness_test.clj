@@ -151,17 +151,17 @@
                         'CxNaturalWorld {:direction :forward})]
       (is (not= pos neg)
           "identical antecedents, opposite conclusions — these must be two sentexes")
-      (testing "and each keeps its own consequent polarity"
-        (is (= :positive (:polarity (v/sentex kb pos))))
-        (is (= :positive (:polarity (v/sentex kb neg)))
-            "both rules are asserted true — the negation is the consequent's polarity,
-             carried in the sentence, and never the rule sentex's own polarity")
+      (testing "and each keeps its own consequent's sign"
+        (is (= (list q '?var0) (:consequent (v/sentex kb pos))))
+        (is (= (list 'not (list q '?var0)) (:consequent (v/sentex kb neg)))
+            "both rules are asserted true — the negation belongs to the consequent,
+             and a rule sentex has no sign of its own")
         (let [negated? (fn [h] (boolean
                                 (some #(and (sequential? %) (= 'not (first %)))
                                       (tree-seq sequential? seq
-                                                (:sentence (v/sentex kb h))))))]
+                                                (v/sentence-of (v/sentex kb h))))))]
           (is (not (negated? pos)) "the positive rule stores no `not`")
-          (is (negated? neg)       "the negative rule keeps its `not` as polarity"))))))
+          (is (negated? neg)       "the negative rule keeps its `not` in its consequent"))))))
 
 ;; ---- range restriction bottoms out as a value ---------
 ;;

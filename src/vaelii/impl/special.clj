@@ -16,8 +16,10 @@
                                            posting, no migration, no universal lifting,
                                            because the store already holds what those
                                            side effects produced
-    :wff          (fn [tax sentence])      structural well-formedness (vaelii.impl.wff
-                                           keeps the check fns; the table points at them)
+    :wff          (fn [tax sentence context]) structural well-formedness (vaelii.impl.wff
+                                           keeps the check fns; the table points at them.
+                                           `context` scopes the arms that read it — today
+                                           only `disjoint-problems`)
 
   and `check-entries` refuses an asymmetric entry **at namespace load**, so an
   add-side arm without its removal and rebuild halves is a build failure rather
@@ -72,8 +74,8 @@
 ;; missed one is a conclusion that should have been swept and wasn't.
 ;;
 ;; They queue **rule handles**, never justifications.  That is what makes the index
-;; affordable: a rule handle is an antecedent of every justification it licenses, so
-;; every firing is reachable from the rule through links the TMS already maintains,
+;; affordable: the TMS lists every justification a rule licenses under the rule's node,
+;; so every firing is reachable from the rule through links the TMS already maintains,
 ;; and the index stays at the scale of the rule index rather than of the fact store.
 ;;
 ;; The queue is a **map** `{rule-handle -> triggers}` rather than a set, because rule
@@ -398,6 +400,31 @@
     (recheck-declaration kb (or b sentence))
     (recheck-on-qualitative kb (or b sentence))
     (recheck-preserving-firings kb (or b sentence))))
+
+(defn rules-watching
+  "The watched rules — an `unknown` antecedent or an `exceptWhen` exception among their
+  re-check conditions — that a change to `sentence` could move, keyed as
+  `recheck-on-sentence` keys an arrival: the sentence's functor and, for a negation, its
+  body's functor, each over its global supertype closure.  Empty for a KB with no watched
+  rule.  `settle/released-by-defeat` reads it for a datum a resolution defeated, which
+  moves belief without passing the store or removal chokepoints.
+
+  The closure is the **global** one, as in `recheck-on-predicate`, and not scoped to a
+  context: the two select the same rules for the same datum, and a rule selected here
+  that the datum's contexts cannot reach costs one re-join that derives nothing, where a
+  rule a scoped read missed would be a release never re-derived."
+  [kb sentence]
+  (let [idx (:index kb)]
+    (if-not (seq (reads/watched-rules idx))
+      #{}
+      (let [b     (sx/underlying-body sentence)
+            preds (cond-> [(nm/functor sentence)]
+                    (and b (not= b sentence)) (conj (nm/functor b)))]
+        (into #{}
+              (comp (filter symbol?)
+                    (mapcat #(tax/genls-global (:taxonomy kb) %))
+                    (mapcat #(reads/watched-rules-on idx %)))
+              preds)))))
 
 (defn recheck-every-exception
   "Re-check **every** rule carrying an exception — the blanket trigger.  Two channels
@@ -772,11 +799,11 @@
   functor can head an implication), so it is the structural arm of the
   `integrate-sentex` walk below, and this is its add half."
   [kb handle rule-sentex]
-  (let [s (:sentence rule-sentex)]
+  (let [antes (:antecedent rule-sentex)]
     (p/index-rule (:index kb) handle
-                  (rules/antecedent-predicates s)
+                  (rules/antecedent-keys antes)
                   (rules/consequent-index-pred rule-sentex))
-    (note-rule! kb rule-sentex (rules/antecedent-predicates s) inc)
+    (note-rule! kb rule-sentex (rules/antecedent-keys antes) inc)
     ;; ...and, if it carries an `(unknown S)` antecedent, by the predicates that NAF
     ;; query mentions (`recheck-predicates`).  It must not make the rule term-indexed,
     ;; or `find-sentexes` on `penguin` would return a rule merely because it reasons
@@ -786,7 +813,7 @@
     ;; read rather than a property of the sentence, so it is asked here where the kb is
     ;; (`rules/closed-extent-predicates-of`).  A grant asserted *after* the rule reaches
     ;; it through `index-closed-extent-rules` below.
-    (let [ce (rules/closed-extent-predicates-of (:taxonomy kb) s)]
+    (let [ce (rules/closed-extent-predicates-of (:taxonomy kb) (sx/sentence-of rule-sentex))]
       (when (or (rules/rechecked? rule-sentex) (seq ce))
         (p/index-exception (:index kb) handle
                            (distinct (concat (rules/recheck-predicates rule-sentex) ce)))
@@ -815,8 +842,7 @@
   (doseq [rh (reads/as-stored-rules-by-antecedent (:index kb) [:not pred])]
     (when-let [rsx (p/get-sentex (:records kb) rh)]
       (when (and (rules/rule? rsx)
-                 (seq (rules/closed-negative-antecedents
-                       (rules/antecedents (:sentence rsx)))))
+                 (seq (rules/closed-negative-antecedents (:antecedent rsx))))
         (p/index-exception (:index kb) rh [pred])
         (mark-recheck kb [rh] :all-rejoin))))
   nil)
@@ -926,7 +952,7 @@
                               (when (integer? inf) inf)))
                           (jtms/dependents tms h))
            target   (p/get-sentex (:records kb) h)
-           pred     (some-> target :sentence nm/functor)
+           pred     (some-> target sx/sentence-of nm/functor)
            ;; the global closure on purpose: an under-selected re-check trigger is a
            ;; missed sweep or a missed revival
            firers   (when (symbol? pred)
@@ -1208,7 +1234,7 @@
          {:violation :naming
           :detail    {:message (str "naming invariant: " (str/join "; " ps))}})
        (when-not pre-checked? (checks/constraint-violation kb sentence context))
-       (wff-violation kb sentence)
+       (wff-violation kb sentence context)
        (checks/edge-stratification-violation kb sentence))))
 
 (def ^:private empty-entailment-result {:new [] :violations []})
@@ -1331,7 +1357,7 @@
   A genuine negation is not argument-checked, so it entails nothing; nor does a rule,
   whose stored sentence is an implication."
   [kb sx dh]
-  (if-not (and (= :positive (:polarity sx)) (nil? (:antecedent sx)))
+  (if-not (and (nil? (:antecedent sx)) (not (sx/negative? sx)))
     empty-entailment-result
     (let [sctx (:context sx)]
       (deduce-arg-types kb
@@ -1485,7 +1511,7 @@
     (let [[_ sub] sentence]
       (when (symbol? sub)
         (reduce (fn [acc sx]
-                  (if-not (and (= :positive (:polarity sx)) (nil? (:antecedent sx)))
+                  (if-not (and (nil? (:antecedent sx)) (not (sx/negative? sx)))
                     acc
                     (let [sctx (:context sx)]
                       (merge-with into acc
@@ -1596,7 +1622,7 @@
                        (filter #(jtms/in? tms %))
                        (filter (fn [h]
                                  (when-let [s (p/get-sentex recs h)]
-                                   (= :negative (:polarity s))))))
+                                   (sx/negative? s)))))
               (tax/genls-global (:taxonomy kb) super))))))
 
 (defn subsumption-seeds
@@ -1653,7 +1679,7 @@
         left (fn [h]
                (when-let [sx (p/get-sentex recs h)]
                  (let [sent (:sentence sx)]
-                   (when (and (= :positive (:polarity sx))
+                   (when (and (not (sx/negative? sx))
                               (nil? (:antecedent sx))
                               (= 3 (count sent))
                               (= pred (nm/functor sent)))
@@ -2021,8 +2047,8 @@
   the derivation-path form of the well-formedness check.  Public as `wff-violation`
   below the table; declared-through here because migration needs it before the
   table exists."
-  [kb sentence]
-  (when-let [ps (seq (wff-problems (:taxonomy kb) sentence))]
+  [kb sentence context]
+  (when-let [ps (seq (wff-problems (:taxonomy kb) sentence context))]
     {:violation :not-well-formed
      :detail    {:problems (vec ps)
                  :message  (str "not well-formed: " (str/join "; " ps))}}))
@@ -2238,7 +2264,7 @@
   [kb sentex]
   (let [tx    (:taxonomy kb)
         pctx  (:context sentex)
-        ectxs (equality-contexts kb (:sentence sentex))]
+        ectxs (equality-contexts kb (sx/sentence-of sentex))]
     (when (seq ectxs)
       (->> (tax/meet-closure tx (conj ectxs pctx))
            (filter #(tax/sees? tx % pctx))
@@ -2256,7 +2282,7 @@
   already this reader's answer and a second copy would report the fact twice."
   [kb sentex reader placed]
   (let [handle    (:id sentex)
-        sentence  (:sentence sentex)
+        sentence  (sx/sentence-of sentex)
         tx        (:taxonomy kb)
         rewritten (sx/canon (kb/rewrite-term kb sentence reader))]
     (when-not (or (= rewritten (sx/canon sentence))
@@ -2285,7 +2311,7 @@
           (let [existing (kb/find-sentex-handle kb rewritten reader)
                 v        (when-not existing
                            (or (checks/constraint-violation kb rewritten reader)
-                               (wff-violation* kb rewritten)))]
+                               (wff-violation* kb rewritten reader)))]
             (if v
               {:form rewritten :violations [(assoc v :sentence rewritten :context reader
                                                    :rule handle)]}
@@ -2616,12 +2642,13 @@
   (when-let [sx (p/get-sentex (:records kb) d)]
     (let [ctx       (:context sx)
           visible?  (visible-for ctx)
-          rewritten (sx/canon (kb/rewrite-term* kb (:sentence sx) visible?))]
+          sentence  (sx/sentence-of sx)
+          rewritten (sx/canon (kb/rewrite-term* kb sentence visible?))]
       ;; still displaced only if its own terms still rewrite to something else *and*
       ;; the restatement is actually stored
-      (when (and (not= rewritten (sx/canon (:sentence sx)))
+      (when (and (not= rewritten (sx/canon sentence))
                  (kb/find-sentex-handle kb rewritten ctx))
-        [d (kb/displaced-terms* kb (:sentence sx) visible?)]))))
+        [d (kb/displaced-terms* kb sentence visible?)]))))
 
 (defn- supersession-stamp
   "Everything a supersession answer reads besides the datum's own record: the active
@@ -3116,7 +3143,7 @@
     (let [[_ sub] sentence]
       (when (symbol? sub)
         (reduce (fn [acc sx]
-                  (if-not (and (= :positive (:polarity sx)) (nil? (:antecedent sx)))
+                  (if-not (and (nil? (:antecedent sx)) (not (sx/negative? sx)))
                     acc
                     (merge-with into acc
                                 (derive kb (:sentence sx) (:context sx) (:id sx)))))
@@ -3326,7 +3353,7 @@
     (for [c     (filter symbol? contexts)
           h     (reads/as-stored-in-context (:index kb) c)
           :let  [s (p/get-sentex (:records kb) h)]
-          :when (and s (= :positive (:polarity s)) (nil? (:antecedent s))
+          :when (and s (nil? (:antecedent s)) (not (sx/negative? s))
                      (sequential? (:sentence s))
                      (marked? tax (:sentence s)))]
       s)))
@@ -3606,7 +3633,7 @@
   [kb f]
   (->> (reads/as-stored-with-functor (:index kb) f)
        (keep #(p/get-sentex (:records kb) %))
-       (filter #(and (= :positive (:polarity %)) (nil? (:antecedent %))))))
+       (filter #(and (nil? (:antecedent %)) (not (sx/negative? %))))))
 
 ;; ---- the table -----------------------------------------------------------
 
@@ -3733,8 +3760,8 @@
 
 (defn- defn-wff-problems
   "The `:wff` arm for the three `defn*` collection definitions — the member-variable
-  check (`sx/defn-condition-problems`), read in the table's `[tax sentence]` shape."
-  [_tax sentence]
+  check (`sx/defn-condition-problems`), read in the table's `[tax sentence context]` shape."
+  [_tax sentence _context]
   (sx/defn-condition-problems sentence))
 
 (def ^:private ^:dynamic *edge-replay-skips*
@@ -4143,6 +4170,11 @@
   * a functor with arms and no declaration, or a declaration and no arms.  The two are
     one enumeration now, and a functor in only one of them is a predicate the engine
     either interprets without saying so or says something about and does nothing with.
+    `arm-functors` is the set of functors the `arms` map keys, read **before** `entries`
+    filters to `pr/in-special-table` — so an arm keyed on a functor no declaration places
+    in the table is refused here rather than left out of the join unreported.  The
+    one-argument arity reads the functors off `entries` itself, for a caller driving the
+    validator over a hand-built table.
   * a `:cached` declaration whose arms have no cache triple, or the reverse.
   * a `:checked` declaration whose arms have no `:wff`, or the reverse.
 
@@ -4155,33 +4187,33 @@
   reason `check-entries` already gives itself two shapes under one word: whichever way
   the table is bad, the caller catching it is the namespace load, and there is nothing
   a second keyword would let that caller do."
-  [entries]
-  (let [armed      (set (map first entries))
-        unarmed    (vec (sort (remove armed pr/in-special-table)))
-        undeclared (vec (sort (remove pr/in-special-table armed)))]
-    (when (or (seq unarmed) (seq undeclared))
-      (throw (ex-info (str "the special-predicate arms and the declarations in"
-                           " vaelii.impl.predicates enumerate different functors —"
-                           " declared with no arms: " (pr-str unarmed)
-                           "; armed with no declaration: " (pr-str undeclared))
-                      {:type       :bad-table-entry
-                       :mismatch    :enumeration
-                       :unarmed     unarmed
-                       :undeclared  undeclared})))
-    (doseq [[f spec] entries]
-      (let [cached?  (contains? pr/cached f)
-            checked? (contains? pr/checked f)]
-        (when (not= cached? (boolean (:integrate spec)))
-          (throw (ex-info (str "special-predicate " f " is declared "
-                               (if cached? "" "un") "cached but its arms "
-                               (if cached? "have no" "have a") " cache triple")
-                          {:type :bad-table-entry :mismatch :cached :functor f})))
-        (when (not= checked? (boolean (:wff spec)))
-          (throw (ex-info (str "special-predicate " f " is declared "
-                               (if checked? "" "un") "checked but its arms "
-                               (if checked? "have no" "have a") " :wff arm")
-                          {:type :bad-table-entry :mismatch :checked :functor f})))))
-    entries))
+  ([entries] (check-declarations entries (set (map first entries))))
+  ([entries arm-functors]
+   (let [unarmed    (vec (sort (remove arm-functors pr/in-special-table)))
+         undeclared (vec (sort (remove pr/in-special-table arm-functors)))]
+     (when (or (seq unarmed) (seq undeclared))
+       (throw (ex-info (str "the special-predicate arms and the declarations in"
+                            " vaelii.impl.predicates enumerate different functors —"
+                            " declared with no arms: " (pr-str unarmed)
+                            "; armed with no declaration: " (pr-str undeclared))
+                       {:type       :bad-table-entry
+                        :mismatch    :enumeration
+                        :unarmed     unarmed
+                        :undeclared  undeclared})))
+     (doseq [[f spec] entries]
+       (let [cached?  (contains? pr/cached f)
+             checked? (contains? pr/checked f)]
+         (when (not= cached? (boolean (:integrate spec)))
+           (throw (ex-info (str "special-predicate " f " is declared "
+                                (if cached? "" "un") "cached but its arms "
+                                (if cached? "have no" "have a") " cache triple")
+                           {:type :bad-table-entry :mismatch :cached :functor f})))
+         (when (not= checked? (boolean (:wff spec)))
+           (throw (ex-info (str "special-predicate " f " is declared "
+                                (if checked? "" "un") "checked but its arms "
+                                (if checked? "have no" "have a") " :wff arm")
+                           {:type :bad-table-entry :mismatch :checked :functor f})))))
+     entries)))
 
 (def entries
   "The special-predicate dispatch table: an **ordered** vector of `[functor spec]`
@@ -4196,13 +4228,15 @@
   This vector is *the* functor enumeration the four walks use: integrate,
   disintegrate, rebuild and wff all walk it, so a predicate declared and armed is added
   to all four at once, `check-entries` refuses it half-armed and `check-declarations`
-  refuses it armed without being declared.  `table` below is the lookup view."
+  refuses it armed without being declared — the latter reading the `arms` map keys, which
+  hold every armed functor, not this filtered vector, which by construction holds only the
+  declared ones.  `table` below is the lookup view."
   (-> (into [] (comp (map first)
                      (filter pr/in-special-table)
                      (map (fn [f] [f (merge (declared-half f) (arms f))])))
             pr/entries)
       check-entries
-      check-declarations))
+      (check-declarations (set (keys arms)))))
 
 (def table
   "`entries` as the lookup map the walks below dispatch through."
@@ -4214,10 +4248,15 @@
   "Structural well-formedness problems for `sentence` (empty if OK) — the `:wff`
   column of the table, walked.  A sentence whose functor has no entry (or no `:wff`
   arm) is structurally unconstrained here; its argument *types* are still checked
-  by the arg constraints."
-  [tax sentence]
+  by the arg constraints.
+
+  `context` is the asserting (or, on the derivation path, the landing) context, passed
+  to every arm.  Today only `wff/disjoint-problems` reads it — to scope its
+  genl-relatedness check to the edges that context sees (#92); the rest are
+  context-free structural checks and ignore it."
+  [tax sentence context]
   (if-let [wf (:wff (get table (and (sequential? sentence) (first sentence))))]
-    (wf tax sentence)
+    (wf tax sentence context)
     []))
 
 (defn wff-violation
@@ -4233,9 +4272,12 @@
   and those are what matching, placement and stratification all read.
 
   Dropped and reported rather than thrown, like every check on that path: chaining
-  is a fixpoint and must not abort halfway through one."
-  [kb sentence]
-  (wff-violation* kb sentence))
+  is a fixpoint and must not abort halfway through one.
+
+  `context` is the context the derived sentence lands in, scoping the same
+  genl-relatedness read the assert path scopes (#92)."
+  [kb sentence context]
+  (wff-violation* kb sentence context))
 
 (defn- structural-integrate
   "The **structural** integrate arms — the ones no functor can key, dispatched on the
@@ -4255,7 +4297,7 @@
   reach only through this walk."
   ([kb sentex handle] (structural-integrate kb sentex handle false))
   ([kb sentex handle derived?]
-   (let [sentence (:sentence sentex)
+   (let [sentence (sx/sentence-of sentex)
          f        (nm/functor sentence)]
      (cond
        ;; an exceptWhen meta-sentex names a rule it qualifies — register it in the
@@ -4287,7 +4329,7 @@
   special functor, else the structural arm.  Shared by `integrate-sentex` (assert
   path) and `integrate-twin` (migration), so the dispatch lives in one place."
   [kb sentex handle]
-  (if-let [e (get table (nm/functor (:sentence sentex)))]
+  (if-let [e (get table (nm/functor (sx/sentence-of sentex)))]
     (when-let [g (:integrate e)] (g kb sentex handle))
     (structural-integrate kb sentex handle)))
 
@@ -4329,7 +4371,7 @@
   merge is of two individual *values*, whose twins are facts that match no
   declaration arm at all."
   [kb sentex handle]
-  (let [sentence (:sentence sentex)]
+  (let [sentence (sx/sentence-of sentex)]
     (when-not (kb/equality-sentence? sentence)
       (run-integrate-arms kb sentex handle))
     (recheck-on-sentence kb sentence)))
@@ -4340,7 +4382,7 @@
   reference-counted on the departing sentex's id, so an entry survives while
   another sentex still asserts the same claim."
   [kb sentex]
-  (let [sentence (:sentence sentex)
+  (let [sentence (sx/sentence-of sentex)
         f        (nm/functor sentence)]
     (cond
       (contains? table f)
@@ -4437,7 +4479,7 @@
   forward chaining's `place-conclusion`, the `decontextualized_predicate` lift, the
   argument-constraint entailment, and `derive-equality`."
   [kb sentex handle]
-  (let [sentence (:sentence sentex)]
+  (let [sentence (sx/sentence-of sentex)]
     (if (contains? table (nm/functor sentence))
       (integrate-transitive kb sentex handle)
       (structural-integrate kb sentex handle true))

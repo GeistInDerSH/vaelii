@@ -262,6 +262,33 @@
           (v/assert kb (list 'disjoint dog_t cat_t) 'CxUniverse)
           (is (= 1 (count (v/contradictions kb)))))))))
 
+(tu/deftest-kb retracting-one-functional-in-arg-position-retires-a-pair-the-other-does-not-hold
+  ;; `clash-vocabulary` fingerprints the `functionalInArg` **table** (`pred ->
+  ;; #{positions}`), not the predicate roster: a predicate may carry two positions and
+  ;; each is an independent constraint, so retracting `(functionalInArg P 1)` while
+  ;; `(functionalInArg P 2)` stands must retire a pair position 1 alone convicted.  A
+  ;; roster keyed on the predicate would leave P marked, the vocabulary value unmoved,
+  ;; and a pair convicted only through the retracted position carried forward stale — a
+  ;; `contradictions` report that depends on a declaration that is gone.
+  (binding [checks/*arbitrate-constraints?* true]
+    (tu/with-kb [kb]
+      (tu/with-terms [linkPred Shared]
+        (v/assert kb (list 'functionalInArg linkPred 1) 'CxUniverse)
+        (v/assert kb (list 'functionalInArg linkPred 2) 'CxUniverse)
+        ;; numbers in the constrained slot (argument 1) are unmergeable, so a shared
+        ;; determinant (argument 2) is a real clash rather than a merge; the determinants
+        ;; differ under position 2, so only position 1 convicts this pair
+        (v/assert kb (list linkPred 1 Shared) 'CxUniverse)
+        (v/assert kb (list linkPred 2 Shared) 'CxUniverse)
+        (is (= 1 (count (:pairs @(:clashes kb)))) "position 1 convicts the pair")
+        (is (= 1 (count (v/contradictions kb))))
+        (testing "retracting position 1 retires it, though position 2 keeps linkPred marked"
+          (v/retract! kb (v/handle-of kb (list 'functionalInArg linkPred 1) 'CxUniverse))
+          (is (empty? (v/contradictions kb))
+              "the constraint that convicted the pair is gone")
+          (is (empty? (:pairs @(:clashes kb)))
+              "and the pair is forgotten, not carried forward stale"))))))
+
 (tu/deftest-kb a-standing-pair-is-not-re-derived-by-an-unrelated-settle
   ;; `:clashes` is consulted every settle and a settle runs after every mutation, so
   ;; re-deriving every standing pair each time makes loading N clashing facts O(N²) —
@@ -1057,30 +1084,24 @@
         (is (v/assert kb (list cat_t Muffet) 'CxUniverse)
             "an unstated policy arbitrates when the process default does")))))
 
-(deftest a-declaration-arriving-last-reaches-back-only-under-arbitrate
-  ;; The asymmetry this option exists for.  A schema that arrives after the facts it
-  ;; convicts is the normal shape of an import, and under `:refuse` the violation is
-  ;; *filed* while both memberships stay believed — the forward entry point refuses an identical
-  ;; fact one line later, so whether the KB is consistent depends on arrival order.
-  (testing ":refuse files the exposure and decides nothing"
-    (tu/with-neutral-kb [kb refusing-kb]
-      (tu/with-terms [dog_t cat_t Muffet]
-        (v/assert kb (list dog_t Muffet) 'CxUniverse {:strength :monotonic})
-        (v/assert kb (list cat_t Muffet) 'CxUniverse)
-        (v/assert kb (list 'disjoint dog_t cat_t) 'CxUniverse)
-        (is (some #{:disjoint} (map :violation (v/violations kb))))
-        (is (empty? (v/contradictions kb)))
-        (is (v/ask? kb (list cat_t Muffet) 'CxUniverse)
-            "the weaker membership is still believed"))))
-  (testing ":arbitrate reaches back and defeats the weaker side"
-    (tu/with-neutral-kb [kb arbitrating-kb]
-      (tu/with-terms [dog_t cat_t Muffet]
-        (v/assert kb (list dog_t Muffet) 'CxUniverse {:strength :monotonic})
-        (v/assert kb (list cat_t Muffet) 'CxUniverse)
-        (v/assert kb (list 'disjoint dog_t cat_t) 'CxUniverse)
-        (is (v/ask? kb (list dog_t Muffet) 'CxUniverse))
-        (is (not (v/ask? kb (list cat_t Muffet) 'CxUniverse))
-            "the default loses to known-true content it was stored before")))))
+(deftest a-declaration-arriving-last-reaches-back-under-either-policy
+  ;; A schema that arrives after the facts it convicts is the normal shape of an import.
+  ;; It reaches back under both policies, because a recover of the same records decides the
+  ;; pair from its region whatever the policy — a live KB that only filed the clash would
+  ;; go on believing the weaker side until its first restart.  The policies differ at the
+  ;; entry point, which the tests above cover, and not here.
+  (doseq [[label build] [[":refuse" refusing-kb] [":arbitrate" arbitrating-kb]]]
+    (testing label
+      (tu/with-neutral-kb [kb build]
+        (tu/with-terms [dog_t cat_t Muffet]
+          (v/assert kb (list dog_t Muffet) 'CxUniverse {:strength :monotonic})
+          (v/assert kb (list cat_t Muffet) 'CxUniverse)
+          (v/assert kb (list 'disjoint dog_t cat_t) 'CxUniverse)
+          (is (v/ask? kb (list dog_t Muffet) 'CxUniverse))
+          (is (not (v/ask? kb (list cat_t Muffet) 'CxUniverse))
+              "the default loses to known-true content it was stored before")
+          (is (not-any? #{:disjoint} (map :violation (v/violations kb)))
+              "decided, so not also filed as exposed"))))))
 
 (deftest belief-agrees-whichever-arrived-first-under-arbitrate
   ;; Storage does not: the schema-first order **refuses** the clashing membership at the
@@ -1113,13 +1134,12 @@
     (is (= :unknown-option (:type d)))
     (is (= [:arbitrate :refuse] (:options d)))))
 
-(deftest a-recover-decides-a-standing-clash-under-either-policy
+(deftest a-restart-agrees-with-the-live-kb-under-either-policy
   ;; The policy lives on the KB handle, not in the store, so the same records can be
   ;; reopened under the other one — and a rebuild's region is *every* stored sentex, so
   ;; `clash-nogoods` finds a standing clash from the region alone and decides it whichever
-  ;; policy is in force.  Pinned rather than left to be discovered: under `:refuse` a KB
-  ;; believes both sides of a clash it was built incrementally into and one side of the
-  ;; same clash after a restart, and that asymmetry should not move without a test failing.
+  ;; policy is in force.  The live KB decides the same pair as the declaration arrives
+  ;; (`settle/clash-candidates`), so belief is one answer either side of a restart.
   ;; Its own space, keyed by a namespaced vector rather than a number, so it can
   ;; collide with nothing — including a second concurrent run, which `VAELII_TEST_SPACE`
   ;; moves the suite's block for but could not move a hard-coded integer.
@@ -1135,13 +1155,14 @@
       (let [kb (doto (v/open-kb (assoc spaces :constraints :refuse :recover? false)) (tu/clear-kb!))]
         (try
           (build! kb dog_t cat_t Muffet)
-          (is (= [true true] (believed kb dog_t cat_t Muffet))
-              ":refuse files the exposure and leaves both sides believed")
-          (is (some #{:disjoint} (map :violation (v/violations kb))))
-          (testing "recovered under the same policy, the clash is decided"
+          (is (= [true false] (believed kb dog_t cat_t Muffet))
+              ":refuse decides the late declaration's clash as it arrives")
+          (is (not-any? #{:disjoint} (map :violation (v/violations kb))))
+          (testing "recovered under the same policy, the answer is the same"
             (let [re (v/open-kb (assoc spaces :constraints :refuse :recover? :auto))]
               (is (= [true false] (believed re dog_t cat_t Muffet)))))
-          (testing "and under :arbitrate, which agrees either side of the restart"
+          (testing "and under :arbitrate"
             (let [re (v/open-kb (assoc spaces :constraints :arbitrate :recover? :auto))]
               (is (= [true false] (believed re dog_t cat_t Muffet)))))
           (finally (tu/clear-kb! kb)))))))
+

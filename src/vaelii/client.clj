@@ -659,6 +659,13 @@
   [conn k y]
   (c/sees? conn k y))
 
+(defn sentence-of
+  "A sentex map's canonical sentence: a literal's `:sentence`, or for a rule the `(implies
+  <antecedent> <consequent>)` form built from its `:antecedent` and `:consequent` — a rule
+  map carries no `:sentence` of its own."
+  [conn sx]
+  (c/sentence-of conn sx))
+
 (defn sentex-count
   "How many sentexes the KB holds, in total — the count the count-aware trie keeps at its
   root, so O(1) and nothing fetched."

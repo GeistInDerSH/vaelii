@@ -225,6 +225,17 @@ an entry omits it is not a wrong answer but an **empty** one — the compound is
 against a store that holds a symbol, and nothing comes back, which is
 indistinguishable from a KB that was never told.
 
+Two paths resolve a NAT the same way — dedup, never mint — without being query reads,
+through `nat/resolve-for-read`, which answers nil when a NAT was never minted rather than
+a sentence carrying the `no-match` sentinel. `handle-of` reads the constant `ist` stored,
+so a lookup of the compound finds the stored sentex. `assert-inert` stores the resolved
+sentence, so an inert record keys on the constant every read reifies to instead of a
+compound no read finds, and refuses a NAT this KB never minted (`:unminted-nat`) — it
+never mints, since a `termOfUnit` is a belief-carrying write this entry point does not do.
+`canonical-sentex` resolves before it canonicalizes, so its content identity agrees with
+`handle-of`; a NAT with no minted constant has no canonical stored form yet, and the
+compound stands.
+
 ## The corresponding predicate
 
 An ontology that reifies `MotherFn` usually also has `motherOf`, and the two are one

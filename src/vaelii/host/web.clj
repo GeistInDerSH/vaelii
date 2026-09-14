@@ -74,6 +74,7 @@
             ;; one read, `write-hazards`: whether the KB on screen is one whose belief was
             ;; never built, which the write guard below refuses on and `active-caveat`
             ;; already reports the read half of
+            [vaelii.impl.jtms :as jtms]
             [vaelii.impl.kb :as kb]
             ;; one read, `query-contexts`: the three reading modes that wear a context's
             ;; spelling, so the refusal a page owes for one names them off the roster
@@ -83,6 +84,7 @@
             ;; one read, `assertable?`: the strength class the assert form's control is
             ;; held to, so the page refuses what `core/assert` would refuse rather than
             ;; reading any value at all as "known-true"
+            [vaelii.impl.sentex :as sx]
             [vaelii.impl.strength :as strength]))
 
 ;; The browser reads the KB through `vaelii.core` alone — it reaches into **zero**
@@ -561,7 +563,7 @@
   the diagonal out — a stated `(disjoint A A)` is content and is shown."
   [kb]
   (let [declared (into #{} (keep (fn [s] (let [[_ a b] (:sentence s)]
-                                           (when (and a b (= :positive (:polarity s)))
+                                           (when (and a b (not (sx/negative? s)))
                                              (disjoint-pair a b)))))
                        ;; the functor root rather than `(disjoint ?a ?b)`: a pattern with
                        ;; no ground argument gives the trie nothing to narrow on and fans
@@ -719,7 +721,7 @@
   [view s]
   (let [h         (:id s)
         rule?     (some? (:antecedent s))
-        neg?      (= :negative (:polarity s))
+        neg?      (sx/negative? s)
         asserted? (some? (:strength s))
         in?       (believed? view h)
         dir       (:direction s)
@@ -1181,6 +1183,9 @@
    ;; and the other read-side one the same scan reaches: a bounded `ask` / `prove` whose
    ;; clock ran out before the search did, so what it held was a prefix
    :budget-exhausted     "out of time"
+   ;; `assert-inert` refusing a reifiable NAT this KB never minted — not a `check-edit`
+   ;; problem, but the same scan reaches it in core.clj
+   :unminted-nat         "unminted nat"
    :error                "error"})
 
 (defn- problem-chip-word [t]
@@ -2153,7 +2158,7 @@
     (prime-belief! view (map :id page))
     (list
      (for [s     page
-           :when (and (= :positive (:polarity s)) (believed? view (:id s)))
+           :when (and (not (sx/negative? s)) (believed? view (:id s)))
            :let  [[_ term text] (:sentence s)]]
        ;; name prominent, first-sentence gloss muted; the whole comment hovers as a
        ;; title and is on the term's own page — the front page stays scannable
@@ -2840,7 +2845,7 @@
   (for [{:keys [pos sentexes]} groups
         :when (and pos (<= pos 2))
         s     (flank-scan sentexes)
-        :when (and (nil? (:antecedent s)) (= :positive (:polarity s)) (believed? view (:id s)))
+        :when (and (nil? (:antecedent s)) (not (sx/negative? s)) (believed? view (:id s)))
         :let  [sent (:sentence s)]
         :when (and (sequential? sent) (= 3 (count sent)))
         :let  [[p a b] sent
@@ -3970,10 +3975,12 @@
 (defn justification-page [{:keys [kb] :as view} jid]
   (if-let [d (v/justification kb jid)]
     (let [antes    (:antecedents d)
+          ;; the antecedents plus the rule: what validity reads, so what can be OUT
+          grounds  (jtms/rests-on d)
           conc     (:consequence d)
           ;; one batched read; sentex-list below re-uses the same primed cache
-          _        (prime-belief! view (conj (vec antes) conc))
-          out      (into [] (remove #(believed? view %)) antes)
+          _        (prime-belief! view (conj grounds conc))
+          out      (into [] (remove #(believed? view %)) grounds)
           ;; the JTMS ruled this justification blocked — its rule's `exceptWhen` holds —
           ;; so it supports nothing even when every argument is IN; a separate condition
           ;; from an argument being OUT, and stated separately below
@@ -4016,7 +4023,7 @@
                  :else
                  (list
                   [:p [:span.tag.tag-out "not supporting"] " — " (count out) " of "
-                   (count antes) " arguments are OUT, so this justification confers nothing "
+                   (count grounds) " arguments are OUT, so this justification confers nothing "
                    "right now. Its conclusion "
                    [:a.ref {:href (str "/sentex/" conc)} "#" conc] " is "
                    (if conc-in? [:span.tag.tag-in "IN"] (state-tag view conc)) "."]
@@ -4672,7 +4679,7 @@
                              (remove doomed)
                              (remove #(v/premise? kb %))
                              (filter (fn [c]
-                                       (every? #(some doomed (:antecedents %))
+                                       (every? #(some doomed (jtms/rests-on %))
                                                (v/supporting-justifications kb c)))))
                        (v/dependent-justifications kb h))]
         (recur (into doomed gone) (into (pop frontier) gone) (into extra gone))))))

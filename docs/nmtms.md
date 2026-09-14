@@ -285,8 +285,8 @@ operation streams; plain `lein test` runs the whole engine through the default d
 and `VAELII_TEST_TMS=reference lein test` through the persistent-map baseline.
 
 **The network keeps the graph; the record store keeps the record.** A justification is
-stored durably, and belief reads only part of it — the antecedents, the `:out` list, the
-consequence, the strength and the informant. The firing's **variable bindings** are no
+stored durably, and belief reads only part of it — the antecedents, the consequence, the
+strength and the informant. The firing's **variable bindings** are no
 part of that: they are read only to re-evaluate an `exceptWhen` query or a NAF antecedent
 per firing, and both readers hold the KB and take the record from the store. So
 `jtms/graph-just` projects a justification on the way in, and neither representation
@@ -301,11 +301,15 @@ content** (`kb/antecedent-order`) — forward chaining's two placement sites and
 `special/derive-equality`, the three handed a vector whose order is an arrival. The order
 is the sentence then the context — a **structural** key, walked in place by
 `nm/compare-form` rather than printed, so no ambient `*print-length*` can elide two long
-sentences to one prefix and drop the tie back onto arrival — and the informant is ordered with the rest
-rather than pinned to a position (the record names it in its own `:informant` slot, and
-symbol informants like `rewriteOf` are no part of the vector at all). Nothing reads a
-position — `valid?` and `has-justification?` read the set, and `why` lifts the rule out by
-identity.
+sentences to one prefix and drop the tie back onto arrival — and the vector never holds
+the informant: the record names a rule once, in its own `:informant` slot, and
+`jtms/rests-on` adds it back for a reader that wants everything a justification stands on.
+Nothing reads a position — `valid?` and `has-justification?` read the set.
+
+**A rule informant is an implicit antecedent.** `valid?` needs the rule believed, and
+both representations list the justification under the rule's node in the adjacency, so
+retracting or defeating a rule withdraws everything it licensed through the same region
+walk a fact's retraction takes.
 
 **The other four build the vector positionally instead, and the position is a role.**
 `special/deduce-lift` writes `[fact, declaration]`, `special/justify-twin!` writes
@@ -326,8 +330,9 @@ never on the handle is one rule with one home:
 
 **The key is built once per entry, not once per comparison.** `sort-by` calls its key fn
 from inside the comparator, so a naive sort builds it ~2·n·log₂n times — and each build
-is a `get-sentex` per antecedent. A rule handle is an antecedent of every
-firing it licenses, so `dependent-justifications` pays that multiple on the whole history:
+is a `get-sentex` per antecedent. The adjacency lists every firing a rule licenses
+under the rule's node, so `dependent-justifications` on a rule pays that multiple on the
+whole history:
 at 100k firings, ~3.3M key builds where 100k would do. All three sites decorate, sort and
 undecorate through `nm/sort-by-content-key`, which is the same comparator over the same
 keys and stable either way.
@@ -341,7 +346,7 @@ relabel applies all-or-nothing), and order independence rests on a node's backwa
 ### Blocked justifications (`exceptWhen`)
 
 `:blocked` is a set of **justification ids** whose rule's exception currently holds,
-and `valid?` reads it alongside its antecedent and `:out` checks. The TMS is pure and
+and `valid?` reads it alongside its antecedent and rule checks. The TMS is pure and
 has no KB, so it cannot run the level-6 exception query itself: the caller evaluates
 the exception and hands the answer in with `set-blocked`, which *replaces* the set
 rather than accumulating it — the same discipline as the defeated set, and the reason
@@ -367,9 +372,8 @@ stale id must not survive to be reapplied.
 
 Both premises and justifications carry a **strength**: a premise its assumption strength
 (on the sentex record), a `Justification` a `strength` field (the defeat-class it
-confers) alongside an `out` slot (reserved for negation-as-failure antecedents; empty
-today — NAF is built, as `unknown` / `thereExists`, but by re-evaluation rather than
-the out-list, see [naf.md](naf.md)).
+confers). A `Justification` has no out-list: NAF is built, as `unknown` /
+`thereExists`, by re-evaluation, see [naf.md](naf.md).
 
 **Retraction** is dependency-directed, expressed as relabel-then-sweep: drop the
 premise, relabel, and in the retracted datum's consequence-closure delete any datum
@@ -478,6 +482,16 @@ assert / retract / `forward-chain` / `recover`:
    - **a minimum shared by several `:monotonic` members** → irreducible; report it in
      `conflicts` (never throw).
 4. Loop until no active nogood remains.
+
+Steps 1 and 3 run region-locally; step 2 does not. A relabel — step 1's revival, and the
+defeat step 3 applies — is a belief fixpoint over the consequence justifications, held to
+the affected region by [Locality](#2-locality). Step 2 reads no justification edge. It
+asks whether some context sees both a believed `P` and a believed `(not P)` — a walk over
+the `genlCx` lattice, not over the support graph. So a `P` and a `(not P)` many contexts
+apart pair on the same terms as two in one context. The two narrowings above bound step 2
+by the `:opposed` set and the change, not by a region, so its cost tracks the standing
+contradictions instead of the graph. Detection ranges over the lattice; the defeat that
+resolves a nogood, and the belief that defeat moves, stay region-local.
 
 A default/default clash is **not** decided, and defeat-class is the only axis it could
 be decided on (see *There is no second axis*). Where one rule names the other's case,
@@ -631,6 +645,79 @@ Two other designs — moving the reconcile into the settle loop, and a re-enter 
 `settle-finish` — lose to this one on what they cost elsewhere:
 [why](defenses.md#an-un-merge-re-seeds-through-a-second-channel).
 
+### The set-membership states a node can hold
+
+A node carries two independent descriptions, one persistent and one per-settle. Its
+**belief state** is read from the datum-keyed sets `:in` and `:groundable`, the
+`:defeated` set and the `:superseded` map, and it survives across settles. Its **window
+position** is read from `:touched`, `:touched-in` and `:touched-new`, and
+`reset-touched!` clears those three at `settle-finish`, so a window position exists only
+during the settle that wrote it. `:blocked` is keyed by justification id rather than by
+datum, so it names no node state of its own; a block reaches a node through `valid?`,
+which reads it in both fixpoints.
+
+One asymmetry between the two fixpoints generates the belief states. `relabel-region*`
+computes `:in` by forcing the `:defeated` set OUT and computes `:groundable` by forcing
+nothing OUT. Both pass the same `:blocked` set to `valid?`. So a defeat is the only thing
+that holds a node in `:groundable` while keeping it out of `:in`, and a block or a lost
+derivation removes a node from both. A defeated node stays groundable and returns when
+`clear-defeats!` empties the set; a node with no groundable derivation is the sweep's
+target.
+
+Reported belief — the answer `in?` gives — is `:in` minus `:superseded`, because a
+superseded spelling stays in `:in` to keep its rewritten twin's justification valid even
+though it no longer matches. Writing a node's membership as (in, groundable, defeated,
+superseded), the invariants `:in ⊆ :groundable`, `defeated ⇒ not :in` and
+`superseded ⇒ :in` leave five belief states:
+
+| belief state | in | groundable | defeated | superseded | `in?` |
+|---|:--:|:--:|:--:|:--:|:--:|
+| believed | ● | ● | | | yes |
+| superseded | ● | ● | | ● | no |
+| defeated | | ● | ● | | no |
+| held OUT by a defeat | | ● | | | no |
+| no groundable derivation | | | | | no |
+
+A `believed` node is a premise or a datum with a valid justification. A node `held OUT by
+a defeat` has every derivation running through a defeated supporter, so it is OUT now and
+returns when that defeat clears. A node with `no groundable derivation` has no premise and
+no derivation even with defeats ignored: a retraction sweep deletes it, and one still
+present in `:nodes` is one a sweep has not yet reached.
+
+Crossed with the window position the most recent settle left the node in, seventeen of
+the twenty pairs occur:
+
+| belief state \ window | boundary | revival slot | touched-in | touched-new |
+|---|:--:|:--:|:--:|:--:|
+| believed | ✓ | ✓ | ✓ | ✓ |
+| superseded | ✓ | ✓ | ✓ | ✓ |
+| defeated | — | ✓ | ✓ | ✓ |
+| held OUT by a defeat | — | ✓ | ✓ | — |
+| no groundable derivation | ✓ | ✓ | ✓ | ✓ |
+
+The **revival slot** is `:touched` without `:touched-in` or `:touched-new` — a datum this
+settle relabelled that was neither believed at the settle's start nor created by it.
+`jtms/revived` reads that slot filtered to what is believed now, so a believed node in the
+revival slot is a `revived` one. A believed node created this settle sits under
+`touched-new`, and a believed node the settle relabelled without moving its label sits
+under `touched-in`.
+
+Two mechanisms rule out the three absent pairs:
+
+- A **defeated** node and a node **held OUT by a defeat** are never boundary nodes.
+  `clear-defeats!` resettles the previously-defeated set every settle and `defeat`
+  resettles the newly-defeated set, so a defeated node is relabelled every settle it stays
+  defeated. `affected-region` is that node's forward consequence closure, so every node the
+  defeat holds OUT is relabelled with it.
+- A node **held OUT by a defeat** is never `touched-new`. Creating a node's TMS node needs
+  a justification whose antecedents matched, and the matcher reads only believed
+  antecedents (`chain/*matcher*`), so a datum enters at creation with valid support and
+  lands believed. A datum reaches the held-OUT state only when a later defeat lands on a
+  supporter of a node that already had a TMS node.
+
+A node in the revival slot under the defeated or held-OUT state is one the
+`clear-defeats!` pass returned to `:in` for the round and the re-defeat then put back OUT.
+
 ### Which entry point the content came through
 
 One logical situation, one representation: the nogood above, however the content
@@ -668,13 +755,16 @@ neither reads the process default `checks/*arbitrate-constraints?*`
 (`VAELII_ARBITRATE_CONSTRAINTS=1`), which is what lets a whole suite run under one
 policy; `checks/arbitrating?` is the one read of both.
 
-The policy governs the **retroactive** half too, and that is where it is felt: a
-declaration arriving *after* the content it convicts is what an import routinely does,
-and under `:refuse` the clash is filed by the exposure pass (`violations`) while both
-sides stay believed, even though the same fact asserted one line later would be refused.
-Under `:arbitrate` the declaration reaches back (`settle/declaration-implicates`) and the
-weaker side is defeated, so belief does not depend on whether the schema or the facts
-arrived first. Which sentences count as a declaration for that purpose is
+The **retroactive** half is not policy. A declaration arriving *after* the content it
+convicts — what an import routinely does — reaches back under either policy
+(`settle/declaration-implicates`): the weaker side is defeated, or an equal-strength set
+is reported by `contradictions`, so belief does not depend on whether the schema or the
+facts arrived first, and a recover of the same records, whose region is every stored
+sentex, decides the same pairs. Under `:refuse` the entry point still refuses the same
+fact asserted one line later, and a refused write never enters the KB. What the policy
+changes on this side is the vantage a clash is asked from: under `:refuse` a pair only a
+common descendant context sees is reported by the exposure pass (`violations`) and not
+decided, live and after a restart alike. Which sentences count as a declaration for that purpose is
 [taxonomy.md](taxonomy.md); the one worth knowing here is that a term **joining** a
 disjoint metatype is one of them, and is the only one the taxonomy rather than the
 sentence identifies.
@@ -1202,10 +1292,9 @@ does not read, or a `:strength` that is not an assertable class).
   unstratified derived edge.
 - NAF is the thing that is not a nogood. In rule antecedents it is `unknown` /
   `thereExists`, re-evaluated on the `exceptWhen` triggers and storing nothing
-  ([naf.md](naf.md)); the JTMS `out` slot stays **reserved** — an existential NAF is
-  negation over a pattern, with no single handle for the out-list to hold, so
-  re-evaluation is the mechanism and nothing ever populates the slot. `valid?` reads it
-  on every relabel and finds it empty.
+  ([naf.md](naf.md)); a `Justification` has **no out-list** — an existential NAF is
+  negation over a pattern, with no single handle for an out-list to hold, so
+  re-evaluation is the mechanism.
 - A default/default clash is never arbitrated: it is reported as a dilemma and the
   ranking is the application's. That is deliberate (see "There is no second axis"), but
   it does mean the engine offers no ordering at all among equally-strong rebuttals.
@@ -1214,7 +1303,12 @@ does not read, or a `:strength` that is not an assertable class).
   `vaelii.impl.asp.label/classify` recovers that distinction by enumerating optima
   (`:true` / `:supportable` / `:false`), and `label-context` materializes one
   labeling as a specialization context — but belief itself still commits silently.
-  See [asp.md](asp.md).
+  A backend-free reading of the same distinction enumerates the dilemmas' optimal
+  resolutions region-locally and classifies each datum by which keep it
+  (`jtms/grounded-in-region`, `label/classify-local`): sound, and exact for a datum whose
+  clusters it enumerates — the one its support touches, or the several whose product of
+  resolutions is small enough — degrading to `:supportable` for a datum whose clusters are
+  too many or too large to enumerate ([labeling.md](labeling.md)).  See [asp.md](asp.md).
 - Cardinality/aggregate contradictions are not expressed; a nogood is a flat set.
 - **An equality is not defeasible by its own negation.** Once `(rewriteOf Pref Dep)`
   merges the two, every sentence naming `Dep` is rewritten — including

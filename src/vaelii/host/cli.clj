@@ -297,7 +297,7 @@
     (case cmd
       "assert"      (v/assert kb (nth args 0) (nth args 1) strength)
       "assert-rule" (v/assert-rule kb (nth args 0) (nth args 1) (nth args 2) strength)
-      "match"       (in-content-order (map :sentence (v/sentexes-matching kb (nth args 0) (nth args 1))))
+      "match"       (in-content-order (map v/sentence-of (v/sentexes-matching kb (nth args 0) (nth args 1))))
       "query"       (in-content-order (v/query kb (nth args 0) (nth args 1) depth))
       "query?"      (v/query? kb (nth args 0) (nth args 1) depth)
       "ask"         (in-content-order (v/ask kb (nth args 0) (nth args 1)))

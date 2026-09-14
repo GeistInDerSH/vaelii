@@ -967,6 +967,42 @@
       (is (not (v/ask? kb (list 'unknown (list 'not (list 'happy Zed)))))
           "the believed negation is *not* unknown"))))
 
+(tu/deftest-kb a-defeat-that-releases-an-unknown-antecedent-is-order-independent
+  ;; `(pp ?x) & (unknown (happy ?x)) => (rr ?x)`, over a default `(happy Zed)` that a
+  ;; monotonic `(not (happy Zed))` defeats.  With the defeat in place the NAF query holds
+  ;; (`unknown-holds-of-a-defeated-default`), so the rule derives `(rr Zed)` in every
+  ;; assertion order.  When the negation arrives last, the firing was refused while
+  ;; `(happy Zed)` was believed, and the defeat that releases the query moves `(happy Zed)`
+  ;; OUT without removing it from the store — so no re-check re-evaluates the firing.
+  (tu/with-terms [pp happy rr Zed]
+    (let [rule     (list 'implies (list 'and (list pp '?x) (list 'unknown (list happy '?x)))
+                         (list rr '?x))
+          assert-a (fn [s opts] (v/assert kb s 'CxWell opts))
+          defeat   #(assert-a (list 'not (list happy Zed)) {:strength :monotonic})
+          derive   #(do (assert-a rule {:direction :forward})
+                        (assert-a (list pp Zed) {}))
+          happy!   #(assert-a (list happy Zed) {:strength :default})]
+      (testing "the defeat arrives before the rule fires: the conclusion is derived"
+        (happy!) (defeat) (derive)
+        (is (v/ask? kb (list 'unknown (list happy Zed)) 'CxWell))
+        (is (v/ask? kb (list rr Zed) 'CxWell)))))
+  (tu/with-terms [pp happy rr Zed]
+    (let [rule     (list 'implies (list 'and (list pp '?x) (list 'unknown (list happy '?x)))
+                         (list rr '?x))
+          assert-a (fn [s opts] (v/assert kb s 'CxWell opts))]
+      (assert-a rule {:direction :forward})
+      (assert-a (list pp Zed) {})
+      (assert-a (list happy Zed) {:strength :default})
+      (testing "while the default is believed the firing is refused"
+        (is (not (v/ask? kb (list rr Zed) 'CxWell))))
+      (assert-a (list 'not (list happy Zed)) {:strength :monotonic})
+      (testing "the defeat arrives after the refused firing: the NAF query now holds"
+        (is (not (v/ask? kb (list happy Zed) 'CxWell)) "the default is defeated")
+        (is (v/ask? kb (list 'unknown (list happy Zed)) 'CxWell)))
+      (testing "so the rule reading the same query derives the conclusion, as in the other order"
+        (let [derived? (v/ask? kb (list rr Zed) 'CxWell)]
+          (is derived? "(rr Zed) is derived once the defeat releases (unknown (happy Zed))"))))))
+
 ;; ---- block-if-any across several unknown antecedents --------------------
 ;; Each `(unknown S)` is an INDEPENDENT block condition (unlike an exception's
 ;; conjuncts, which block only when all hold): any one derivable inner blocks.

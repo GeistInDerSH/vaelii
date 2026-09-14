@@ -1033,6 +1033,29 @@
   bargain that scope already makes for belief."
   false)
 
+(def ^:dynamic *defer-cycle-scc?*
+  "When true, an edge that closes a cycle marks the relation `:loose?` and leaves the
+  strong-component recompute to `restore-depths`, instead of running `repair-depths`
+  outright inside `activate`.
+
+  `activate` repairs a cycle-closing edge eagerly by default, even under
+  `*defer-depths?*`: a forward firing seeded by that edge reads `:scc` through
+  `placement-rep` before the batch settles, so a deferred `:scc` would place one
+  conclusion on two members of a `genlCx` cycle (see `activate`).  Recovery has no such
+  reader.  `rebuild-taxonomy` and the belief reconcile that follows it read `:scc` only
+  through `reachable?`, which walks unpruned while `:loose?` and so answers correctly
+  from a stale `:scc`; the first `placement-rep` read is `settle`, which runs after
+  `restore-depths`.  So recovery binds this true and pays one O(V+E) repair for the
+  whole replay, not one per cycle-closing edge.  A corpus decides how many those are,
+  and a foreign or bulk writer, or a store replayed past the assert-time cycle checks
+  (`wff/genl-problems`, `wff/genlCx-problems`), can leave a large strong component whose
+  every internal edge would otherwise repair the whole relation again.
+
+  A caller that binds this must call `restore-depths` before any `placement-rep` reader
+  runs, as `vaelii.impl.recovery/recover` does; a bind without that closing repair would
+  leave `:scc` stale for the life of the KB."
+  false)
+
 (defn- local-lift
   "Restore `depth[a] > depth[b]` for the newly-inserted edge a→b **alone**: lift `a`
   just above `b` and check only the edges *into* `a`, never its descendants.
@@ -1120,9 +1143,10 @@
   against the O(descendants) *per edge* that repairing on insert costs.
 
   Condensing is what makes the pass total.  Walking the raw graph, a node on a cycle
-  is never ready and would keep a stale depth — sound only for a graph that has none,
-  which `genlCx` no longer is (a `genlMt` cycle is a claim OpenCyc makes 49 times,
-  and it means the contexts see each other)."
+  is never ready and would keep a stale depth — sound only for an acyclic graph.
+  `wff` refuses a `genl` or `genlCx` cycle at assert, but a recovered or foreign
+  store replays its stored edges past those checks (`recovery/recover`), so the pass
+  must condense a cycle such a store presents rather than assume none exists."
   [rel]
   (let [nodes (:nodes rel)
         fwd   (:fwd rel)
@@ -1170,9 +1194,11 @@
   redundant re-assert adds no work and leaves the read memo valid.
 
   `wff` (assert path) and `special/wff-violation` (derivation path) both refuse a
-  `genl` edge that would close a cycle before it reaches here; a `genlCx` cycle is
-  admitted (two contexts that see each other), so the cyclic branch is a `genlCx`
-  branch in practice.  The `reachable?` guard is O(1) in the common case (`a` is a
+  `genl` or `genlCx` edge that would close a cycle before it reaches here, so a fresh
+  assert never takes the cyclic branch.  An edge reaches it only past those checks: a
+  store replayed by `recovery/recover`, a foreign or bulk writer, or a belief-race
+  revival (defeat an edge, assert its reverse, revive the first — the checks read the
+  active adjacency).  The `reachable?` guard is O(1) in the common case (`a` is a
   fresh or shallower node, rejected outright).
 
   An edge that **closes a cycle** merges two components, which is a question about the
@@ -1180,9 +1206,9 @@
   acyclicity, so the relation is repaired outright with `repair-depths` — one O(V+E)
   pass, for an event a corpus has a few dozen of — and leaves here with `:scc` already
   holding the merged component.  Repairing now rather than at the batch's settle is
-  what `placement-rep` needs: the assert that closes the cycle chains *before* it
-  settles, and a firing seeded by the closing edge reads `:scc` to land its conclusion
-  on the component's one representative.  Left to `restore-depths`, that firing would
+  what `placement-rep` needs: the cycle-closing edge chains *before* the batch settles,
+  and a firing seeded by it reads `:scc` to land its conclusion on the component's one
+  representative.  Left to `restore-depths`, that firing would
   read the pre-merge map and land on whichever member it happened to see, and the same
   firing re-derived later would land on the representative — two sentexes for one
   claim in contexts that see each other.
@@ -1190,13 +1216,20 @@
   Under `*defer-depths?*` the acyclic repair is `local-lift` instead — the edge's own
   source, not its descendants.
 
+  Under `*defer-cycle-scc?*` — recovery's replay, where no `placement-rep` reader runs
+  before `restore-depths` — the cyclic repair is deferred as well: the first cycle marks
+  the relation `:loose?`, `restore-depths` computes `:scc` once for the whole batch, and
+  every edge after that first cycle skips the detection walk (the branch is `loose?`
+  either way).  So the whole replay is O(V+E), not this branch recomputing `:scc` — nor
+  the loose detection walking `b`'s reach — per cycle-closing edge (see the var).
+
   An **already-loose** relation short-circuits the *acyclic* repair, whether or not this
   insert is deferred: with no sound potential `raise-depth` would build on a stale base,
   so the adjacency is recorded and `restore-depths` is left to own it.  Reading
   `:loose?` rather than the dynamic var alone is what keeps that true for an insert
   arriving *after* a batch aborted — the settle that would have repaired never ran.
-  What refuses a `genl` cycle throughout is `wff`, which reads through `reachable-in?`
-  and stays correct while loose.
+  What refuses a `genl` or `genlCx` cycle throughout is `wff`, which reads through
+  `reachable-in?` and stays correct while loose.
 
   A **cycle is still detected while loose**, and paid for, because `:scc` is not a
   pruning: the deferral may postpone a depth, but a firing seeded by the closing edge
@@ -1212,10 +1245,19 @@
   (if (contains? (:edges rel) [a b])
     rel                                            ; already active — nothing to do
     (let [loose?  (boolean (:loose? rel))
-          cyclic? (if loose?
-                    (and (contains? (:nodes rel) a)
-                         (reachable? b a (:fwd rel) nil (:scc rel)))
-                    (reachable? b a (:fwd rel) (:depth rel) (:scc rel)))
+          cyclic? (cond
+                    ;; Recovery defers the cycle repair (`*defer-cycle-scc?*`), and once
+                    ;; the relation is loose the branch below is `loose?` whether or not
+                    ;; this edge closes a cycle — so the detection walk, unpruned while
+                    ;; loose, decides nothing and is skipped.  `restore-depths` recomputes
+                    ;; `:scc` from the final graph regardless.  This is what keeps the
+                    ;; deferred replay O(V+E): without it every edge after the first cycle
+                    ;; pays a walk of `b`'s whole reach, which in a large component is the
+                    ;; component, restoring the per-edge cost the deferral removes.
+                    (and loose? *defer-cycle-scc?*) false
+                    loose? (and (contains? (:nodes rel) a)
+                                (reachable? b a (:fwd rel) nil (:scc rel)))
+                    :else  (reachable? b a (:fwd rel) (:depth rel) (:scc rel)))
           rel     (-> rel
                       (ensure-depth a) (ensure-depth b)
                       (update-in [:fwd a] (fnil conj #{}) b)
@@ -1223,6 +1265,7 @@
                       (update :nodes conj a b)
                       (update :edges conj [a b]))]
       (bump-gen (cond
+                  (and cyclic? *defer-cycle-scc?*) (assoc rel :loose? true)
                   cyclic?          (repair-depths rel)
                   loose?           rel
                   *defer-depths?*  (local-lift rel a b)
@@ -2758,6 +2801,13 @@
               (when pc (swap! pc assoc pk s))
               s))))))
 
+(defn genlCx?-global
+  "Does context sub see context super through **any** active edge — no context
+  scope.  The `genlCx` twin of `genl?-global`, and `sees?`'s unscoped read; `wff`
+  uses it to refuse a cycle, which is a property of the whole edge set."
+  [tax sub super]
+  (reachable-in? tax :genlCx sub super))
+
 (defn sees? "Does context k see assertions in context y?" [tax k y]
   (if-some [scope (relation-scope tax :genlCx k)]
     (let [rel (get @tax :genlCx)]
@@ -3817,6 +3867,20 @@
   the whole marked roster to walk each one's stored extent, the same way it already
   reads `props :functional` for the arity-2 mark."
   [tax] (set (keys (get @tax :functional-in-arg {}))))
+
+(defn functional-in-arg-table
+  "The whole `functionalInArg` table, `pred -> #{n1 n2 …}`, as a value — the positions
+  and not only the predicates.
+
+  `functional-in-arg-predicates` is the predicate roster and drops the positions, which
+  is what a *reach* wants (walk each marked predicate's extent).  A *fingerprint* wants
+  the positions: two positions on one predicate are two independent constraints
+  (`functional-in-arg-over`), so removing one while another stands leaves the predicate
+  in the roster while the constraint it convicted through is gone — the value
+  `settle/clash-vocabulary` compares must move for it, exactly as
+  `metatype-members` moves when a member leaves a still-marked metatype.  One map read,
+  no walk."
+  [tax] (get @tax :functional-in-arg {}))
 
 (defn functional-family-declared?
   "Does the taxonomy carry a functional-family mark of **either** spelling — the global,

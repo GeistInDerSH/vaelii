@@ -582,6 +582,29 @@
     (reify-in kb sentence reify-nat-for-read)
     sentence))
 
+(defn- has-no-match?
+  "Does the read-mode reify of a sentence carry the `no-match` sentinel anywhere — i.e.
+  did some reifiable NAT in it have no stored constant?  Walks lists and vectors only, so
+  a string or other scalar argument is never descended into."
+  [form]
+  (or (= form no-match)
+      (and (or (seq? form) (vector? form))
+           (boolean (some has-no-match? form)))))
+
+(defn resolve-for-read
+  "The read-mode reify of `sentence` (`maybe-reify-for-read`: dedup, never mint) when
+  every reifiable NAT in it already has a stored constant, else nil — the sentence names
+  a NAT that was never minted, so it has no stored atomic form.
+
+  A read entry point hands the reified sentence with its `no-match` sentinels straight to
+  the lookup, which then matches nothing; a write path that must not mint (`core/assert-
+  inert`) refuses on nil instead, and an un-stored canonicalizer (`core/canonical-sentex`)
+  keeps the compound.  Cheap no-op returning the sentence unchanged when the KB declares
+  no `reifiable_function`."
+  [kb sentence]
+  (let [r (maybe-reify-for-read kb sentence)]
+    (when-not (has-no-match? r) r)))
+
 ;; ---- rename / remove detection -------------------------------------------
 ;; The maintenance that keeps the 1:1 constant↔expression invariant.  These find the
 ;; sentexes to act on; the acting (assert an equality to merge, retract to remove)

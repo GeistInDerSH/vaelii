@@ -105,7 +105,44 @@
          (v/disjointness-audit kb 'CxUniverse))
       "the no-context audit passes CxUniverse as the shared-instance vantage"))
 
+;; ---- a type node need not be a symbol ------------------------------------
+
+(tu/deftest-kb the-audit-orders-a-nat-type-node-by-print-key-not-bare-sort
+  ;; A type node need not be a symbol: a NAT standing for a collection an imported ontology
+  ;; has no atomic name for is a list, and `compare` throws on a list — so the N² sweep,
+  ;; sorting `(types kb)` with bare `sort`, threw a bare ClassCastException on such a KB.
+  ;; `by-print-key` orders it, as `disjoint-line` already does.  The bulk path is the bypass
+  ;; that injects a compound genl node the WFF guard would refuse at `assert`.
+  (tu/with-terms [collectionFn Foo]
+    (v/bulk-assert-facts! kb [(list 'genl (list collectionFn Foo) 'thing)] 'CxUniverse)
+    (is (some (complement symbol?) (v/types kb))
+        "a list-shaped type node is present")
+    (let [a (v/disjointness-audit kb)]
+      (is (pos? (:types a)))
+      (is (= (:pairs a) (reduce + (vals (:by-status a))))
+          "every unordered pair got a status — the sweep ordered the list node, not threw"))))
+
 ;; `:coextensional` is two distinct types each `genl` the other — a `genl` cycle, which
 ;; `wff` refuses at assertion. It appears only from a belief-state cycle or an equality
 ;; merge, neither of which a net-neutral fixture stages safely, so it has no constructive
 ;; case here; the allowed-status assertion above pins it as a legal outcome.
+
+;; ---- coverage ratchet -------------------------------------------------------
+;;
+;; Every PR either maintains or improves the disjointness coverage of the starter
+;; KB.  These thresholds are the floor locked in after vaelii#94 (25%→64% disjoint).
+;; Raise them when new disjoint declarations land; never lower them
+;; unless it's to add legitimately orthogonal collections to the upper ontology.
+
+(tu/deftest-kb disjointness-coverage-ratchet
+  (let [a          (v/disjointness-audit kb)
+        pairs      (:pairs a)
+        by-status  (:by-status a)
+        disjoint   (get by-status :disjoint 0)
+        unknown    (get by-status :unknown 0)
+        disjoint-% (* 100.0 (/ disjoint pairs))
+        unknown-%  (* 100.0 (/ unknown pairs))]
+    (is (>= disjoint-% 63.0)
+        (format "disjoint coverage must not regress below 63%% (got %.1f%%)" disjoint-%))
+    (is (<= unknown-% 29.0)
+        (format "unknown pairs must not grow above 29%% (got %.1f%%)" unknown-%))))

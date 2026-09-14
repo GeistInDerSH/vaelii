@@ -183,9 +183,10 @@
 
   A corpus run wants a heap, and `:bench` pins `-Xmx6g`.  An environment `JVM_OPTS` is
   placed before the project's own options and loses to it silently, so edit the vector on
-  the way past — `with-profile` first, `update-in` second:
+  the way past — `with-profile` first, `update-in` second.  The `corpus` arm reads
+  `:cyc-corpus`, so link the reader first (`scripts/link-checkouts.sh`):
 
-      lein with-profile +bench,+with-foreign update-in :jvm-opts conj '\"-Xmx32g\"' -- \\
+      lein with-profile +bench update-in :jvm-opts conj '\"-Xmx32g\"' -- \\
         run -m vaelii.bench.index corpus shapes <dir>"
   (:require [clojure.string :as str]
             [vaelii.bench.plan]

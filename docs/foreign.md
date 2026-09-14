@@ -29,10 +29,8 @@ is no file here to delete and none to change when one arrives.
 
 The dependency runs one way. `vaelii-foreign` depends on `com.vaelii/vaelii`, and this
 repo depends on no plugin. The two are not mutually dependent, and a build here does not
-resolve the plugin at all: `vaelii-foreign` is named in exactly one place in
-`project.clj`, the optional `:with-foreign` profile, and a profile coordinate is not a
-dependency edge. `lein deps`, `lein test` and `lein gate` run on the default profile and
-fetch nothing from the plugin.
+resolve the plugin at all: no `project.clj` profile, dependency or alias names it, so
+`lein deps`, `lein test` and `lein gate` fetch nothing from the plugin.
 
 The direction follows from where the readers call. A reader reaches into
 `vaelii.impl.*`, which is not the public API and is free to change
@@ -41,12 +39,11 @@ which is why a bridge is a separate artifact rather than a namespace here. Rever
 direction would put the engine behind a plugin's release schedule for a format it does
 not read.
 
-One consequence reaches a release. The release carve strips the `-SNAPSHOT` suffix
-tree-wide, so a released engine's `:with-foreign` profile names the plugin at the
-engine's own version — `0.17.0` names `com.vaelii/vaelii-foreign "0.17.0"`. That
-coordinate has to exist on Clojars or the profile resolves nothing, so the plugin
-publishes a version whenever the engine does. `lein lint`'s `versions` row holds the pair
-in the development tree, and the release tooling checks it again before a cut.
+Naming no plugin coordinate keeps the two release schedules apart. An engine cut names no
+`vaelii-foreign` version, so it forces no plugin release, and the plugin publishes when
+its own code changes against whatever engine release it targets. A caller that wants to
+read a foreign format from this checkout supplies the coordinate itself, which the next
+section covers.
 
 ## The extension point
 
@@ -102,26 +99,40 @@ otherwise reads exactly like a format nobody shipped.
 ## Exercising one from here
 
 Nothing in this repo needs a plugin and the suite runs without one, so reading a foreign
-format from *this* checkout is an opt-in:
+format from *this* checkout is an opt-in, and it takes putting the reader on the classpath
+yourself. Two routes do that.
+
+`scripts/link-checkouts.sh` makes `checkouts/vaelii-foreign` and resolves the readers from
+live source, so a change in the plugin is visible here without an install in between:
 
 ```sh
-lein with-profile +with-foreign browser   # a corpus load through the catalog
-lein with-profile +with-foreign repl      # a foreign dump through import-dump
+scripts/link-checkouts.sh
+lein browser   # a corpus load through the catalog
+lein repl      # a foreign dump through import-dump
 ```
 
-The profile is an ordinary dependency (`project.clj`), resolved out of `~/.m2` and scoped
-to the one command you prefix. The other route is `scripts/link-checkouts.sh`, which makes
-`checkouts/vaelii-foreign` and resolves the readers from live source, so a change in the
-plugin is visible here without an install in between.
+An ad-hoc dependency add names a published jar — or one `lein install`ed from the plugin —
+for the one command you prefix, without a checkout:
 
-They differ in blast radius, and the link's matters: Leiningen puts a checkout on
-**every** command's classpath, so a linked build discovers five formats where a shipped
+```sh
+lein update-in :dependencies conj \
+  '[com.vaelii/vaelii-foreign "RELEASE" :exclusions [com.vaelii/vaelii]]' -- browser
+```
+
+The `:exclusions` drops the plugin's own dependency on a *released* vaelii, so that jar
+does not land beside the `src/` this checkout is editing. Name a concrete version in place
+of `"RELEASE"` to pin one. `scripts/with-foreign.sh` wraps that command: it runs `browser`
+by default, takes another task as its arguments, and reads `FOREIGN_VERSION` to pin the
+reader.
+
+The two routes differ in blast radius, and the link's matters: Leiningen puts a checkout
+on **every** command's classpath, so a linked build discovers five formats where a shipped
 build discovers none. A foreign read that works here may be the link rather than the code.
 The suite is not what that endangers — its absence claims read this repo's source tree and
-the extension point rather than the classpath, and it is green either way — but a repl, the browser
-and your own sense of what a bare build does are.
+the extension point rather than the classpath, and it is green either way — but a repl, the
+browser and your own sense of what a bare build does are.
 
-That profile is one step of a longer route. The whole of it — how the reader reaches the
+Either route is one step of a longer one. The whole of it — how the reader reaches the
 classpath, converting a corpus before the catalog will offer it, and what each load
 measures — is [kbs.md](kbs.md).
 

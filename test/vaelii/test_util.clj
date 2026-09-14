@@ -464,9 +464,11 @@
   tree: `load-into` 3,144 ms, `export!` 76 ms for an 89 KB dump, `import!` 267 ms.
 
   A dump is a copy of the KB rather than a shortcut past building one: `import!` restores
-  the records, the justifications and the premise marks, rebuilds the index and recovers
-  belief, so what it produces is what `load-into` produces.  `starter_copy_test` pins
-  that — same sentences, same contexts, same truth, same strength, same belief.
+  the records, the justifications and the premise marks, rebuilds the index, and installs
+  the belief image `export!` wrote (recovering belief when the image does not describe the
+  records it landed), so what it produces is what `load-into` produces.
+  `starter_copy_test` pins that — same sentences, same contexts, same truth, same
+  strength, same belief.
 
   The directory is deleted on JVM exit, deepest entry first, since `deleteOnExit` runs
   its queue in reverse insertion order and will not remove a directory holding files."
@@ -519,10 +521,11 @@
   `core-context/load-into` re-asserts the whole `CxCore.txt` through the full write path,
   and the `neutral-fresh` fixtures rebuild a fresh core KB per test, so that cost is paid
   once for every such test.  A restored dump reaches the same state: `import!` restores
-  the records, the justifications and the premise marks, rebuilds the index and recovers
-  belief, so what it produces is what `load-into` produces — `core_copy_test` pins that,
-  the genlCx edge `load-into` wires first included, because a recovered belief state does
-  not depend on the order the records were written.
+  the records, the justifications and the premise marks, rebuilds the index, and installs
+  the belief image `export!` wrote (recovering belief when the image does not describe the
+  records it landed), so what it produces is what `load-into` produces — `core_copy_test`
+  pins that, the genlCx edge `load-into` wires first included, because belief does not
+  depend on the order the records were written.
 
   The directory is deleted on JVM exit, deepest entry first, as `starter-dump`'s is."
   (delay
@@ -768,7 +771,7 @@
     (is (and (= before-sx now-sx) (= before-dd now-dd))
         (str "KB not restored after teardown — leaked "
              (count leak-sx) " sentex(es), " (count leak-dd) " justification(s) "
-             (pr-str (mapv #(:sentence (v/sentex kb %)) (take 8 leak-sx)))
+             (pr-str (mapv #(v/sentence-of (v/sentex kb %)) (take 8 leak-sx)))
              "; lost " (count lost-sx) " sentex(es), " (count lost-dd) " justification(s) "
              ;; a lost sentex has no record left to print, so the handles are the report
              (pr-str (vec (take 8 lost-sx)))))
@@ -781,9 +784,9 @@
       (is (empty? (set/union leak-pm lost-pm))
           (str "premise marks not restored after teardown — " (count leak-pm)
                " baseline sentex(es) left asserted "
-               (pr-str (mapv #(:sentence (v/sentex kb %)) (take 8 leak-pm)))
+               (pr-str (mapv #(v/sentence-of (v/sentex kb %)) (take 8 leak-pm)))
                ", " (count lost-pm) " left derived that were asserted "
-               (pr-str (mapv #(:sentence (v/sentex kb %)) (take 8 lost-pm)))))))
+               (pr-str (mapv #(v/sentence-of (v/sentex kb %)) (take 8 lost-pm)))))))
   ;; the index's term roster is an absolute invariant, not a delta: it must equal the
   ;; names the surviving records mention.  A term left behind by an incomplete unindex
   ;; shows up here even when the record sets balance.

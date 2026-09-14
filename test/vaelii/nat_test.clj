@@ -69,6 +69,55 @@
         (is (pos? (:removed-sentexes (v/retract! kb (v/handle-of kb s 'CxUniverse)))))
         (is (nil? (v/handle-of kb s 'CxUniverse)))))))
 
+(tu/deftest-kb assert-inert-resolves-a-known-nat-and-refuses-an-unminted-one
+  ;; `assert-inert` reifies for read (dedup, never mint): a NAT with a stored constant is
+  ;; stored under it — where a later `assert` dedups to the one record instead of minting a
+  ;; twin, and every belief-blind read finds it from the compound spelling.  Stored raw the
+  ;; compound was a record `sentexes-matching`/`ask` reified past, `count-with-functor`
+  ;; answered 2 for one proposition, and the reads split across two spellings.  A NAT this
+  ;; KB never minted is refused (`:unminted-nat`): minting a `termOfUnit` is the belief-
+  ;; carrying side effect this entry point never has.
+  (tu/with-terms [FruitFn AppleTree PearTree Rex]
+    (v/assert kb (list 'reifiable_function FruitFn) 'CxUniverse)
+    (testing "a NAT this KB never minted is refused, storing nothing"
+      (let [before (v/sentex-count kb)
+            e (is (thrown? clojure.lang.ExceptionInfo
+                           (v/assert-inert kb (list 'likes Rex (list FruitFn PearTree)) 'CxUniverse)))]
+        (is (= :unminted-nat (:type (ex-data e))))
+        (is (= before (v/sentex-count kb)))))
+    (testing "a NAT minted by a prior assert stores inert under its constant"
+      (let [k  (k-of kb (v/assert kb (list 'color (list FruitFn AppleTree) 'Red) 'CxUniverse))
+            hi (v/assert-inert kb (list 'likes Rex (list FruitFn AppleTree)) 'CxUniverse)]
+        (is (= (list 'likes Rex k) (:sentence (v/sentex kb hi)))
+            "the compound was resolved to the constant, not stored raw")
+        (is (not (v/in? kb hi)) "inert means never a premise")
+        (testing "handle-of of the compound spelling finds that one handle"
+          (is (= hi (v/handle-of kb (list 'likes Rex (list FruitFn AppleTree)) 'CxUniverse))))
+        (testing "a later assert of the same compound resolves to it — one record, then believed"
+          (is (= hi (v/assert kb (list 'likes Rex (list FruitFn AppleTree)) 'CxUniverse)))
+          (is (= 1 (v/count-with-functor kb 'likes)))
+          (is (seq (v/sentexes-matching kb (list 'likes Rex (list FruitFn AppleTree)) 'CxUniverse))
+              "premised, sentexes-matching now reifies the goal and finds it"))))))
+
+(tu/deftest-kb canonical-sentex-resolves-a-nat-to-the-key-assert-stored
+  ;; `canonical-sentex` claims "the exact form `assert` would key on"; `assert` keys a NAT
+  ;; sentence on the minted constant, so this reifies for read (dedup, never mint) and
+  ;; agrees with `handle-of` and the stored spelling.  A NAT this KB never minted has no
+  ;; canonical stored form yet, so the compound is returned unchanged.
+  (tu/with-terms [FruitFn AppleTree PearTree]
+    (v/assert kb (list 'reifiable_function FruitFn) 'CxUniverse)
+    (testing "an unminted NAT keeps its compound form"
+      (is (= (list 'color (list FruitFn PearTree) 'Red)
+             (:sentence (v/canonical-sentex kb (list 'color (list FruitFn PearTree) 'Red)
+                                            'CxUniverse)))))
+    (testing "a minted NAT resolves to the constant assert stored and handle-of finds"
+      (let [h      (v/assert kb (list 'color (list FruitFn AppleTree) 'Red) 'CxUniverse)
+            stored (:sentence (v/sentex kb h))
+            canon  (:sentence (v/canonical-sentex kb (list 'color (list FruitFn AppleTree) 'Red)
+                                                  'CxUniverse))]
+        (is (= stored canon) "canonical-sentex agrees with the stored key")
+        (is (= h (v/handle-of kb canon 'CxUniverse)) "and with handle-of")))))
+
 ;; ---- 2. dedup ------------------------------------------------------------
 
 (tu/deftest-kb the-same-nat-yields-the-same-constant

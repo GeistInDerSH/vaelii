@@ -256,14 +256,25 @@
 
 ;; ---- the locator: a content hash of a sentex's canonical identity --------
 
+(defn- sign-of
+  "`:negative` when `sx` is a negative literal — its sentence a `(not S)` — and
+  `:positive` otherwise.  A sentex map carries its sign in its sentence's head, and the
+  locator digests this keyword beside the sentence, so every seat computes one locator
+  for one sentex."
+  [sx]
+  (let [s (:sentence sx)]
+    (if (and (nil? (:antecedent sx)) (sequential? s) (= 2 (count s)) (= 'not (first s)))
+      :negative
+      :positive)))
+
 (defn- identity-of
-  "A sentex's canonical **identity** as a value: its context, polarity, and
+  "A sentex's canonical **identity** as a value: its context, sign (`sign-of`), and
   canonicalized sentence — everything the store keys a sentex on EXCEPT the per-store
-  handle.  The three fields come off the constructor already canonical (canonical
+  handle.  The fields come off the constructor already canonical (canonical
   variables, sorted symmetric arguments, folded comparisons), so digesting them is
   digesting the same form on every seat."
   [sx]
-  [(:context sx) (:polarity sx) (:sentence sx)])
+  [(:context sx) (sign-of sx) (v/sentence-of sx)])
 
 (defn locator-of
   "The locator of the stored sentex at `handle` — `\"sha256:\"` + hex SHA-256 of its
@@ -531,12 +542,12 @@
                            " — it names no record in this KB")
                       {:type :koinii/no-such-handle :handle handle})))
     {:locator  (locator-of kb handle)
-     ;; the stored `:sentence` IS the asserted form for BOTH polarities — a `:false`
-     ;; sentex keeps its `(not …)` in `:sentence` (docs/storage.md; verified), with
-     ;; `:polarity` a separate flag — so `handle-of` finds it by this field unchanged.  The
+     ;; the stored `:sentence` IS the asserted form for BOTH signs — a negative sentex
+     ;; keeps its `(not …)` in `:sentence` (docs/storage.md), and the sign is read off
+     ;; that head — so `handle-of` finds it by this field unchanged.  The
      ;; field travels raw: it is not re-wrapped in `not`, which would double-negate a
      ;; negative fact into a positive one that resolves to nothing (`:not-received`).
-     :sentence (:sentence sx)
+     :sentence (v/sentence-of sx)
      :context  (:context sx)
      :seat     (:creator (v/provenance kb handle))}))
 
@@ -677,9 +688,9 @@
           {:resolved?  true
            :handle     h
            :locator    (locator-of kb h)
-           :sentence   (:sentence sx)
+           :sentence   (v/sentence-of sx)
            :context    (:context sx)
-           :polarity      (:polarity sx)
+           :polarity   (sign-of sx)
            :seat       (:creator prov)
            :provenance prov})))))
 
@@ -750,9 +761,9 @@
          {:resolved?  true
           :handle     h
           :locator    locator
-          :sentence   (:sentence sx)
+          :sentence   (v/sentence-of sx)
           :context    (:context sx)
-          :polarity      (:polarity sx)
+          :polarity   (sign-of sx)
           :seat       (:creator prov)
           :provenance prov})
        {:resolved? false :reason :not-received :locator locator}))))

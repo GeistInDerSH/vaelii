@@ -27,6 +27,7 @@
             [vaelii.impl.resolution :as res]
             [vaelii.impl.rules :as rules]
             [vaelii.impl.sentex :as sx]
+            [vaelii.impl.settle-phases :as phases]
             [vaelii.impl.skolem :as skolem]
             [vaelii.impl.special :as special]
             [vaelii.impl.taxonomy :as tax]
@@ -536,7 +537,7 @@
                   (naf-blocks? kb (rules/naf-antecedents rsx) @bindings pctx))))
        (when (rules/has-different? rsx)
          (different-blocks? kb (rules/different-antecedents rsx) @bindings))
-       (when-let [ce (seq (closed-extent-antecedents kb (rules/antecedents (:sentence rsx))))]
+       (when-let [ce (seq (closed-extent-antecedents kb (:antecedent rsx)))]
          (closed-extent-blocks? kb ce @bindings pctx))
        (post-join-withdrawn? kb rsx bindings pctx)
        (inheritance-withdrawn? kb rsx bindings pctx)
@@ -553,7 +554,7 @@
    (when-let [csx (p/get-sentex (:records kb) (:consequence j))]
      (let [pctx (:context csx)
            inf  (:informant j)]
-       (or (antecedent-hidden? kb (:antecedents j) pctx)
+       (or (antecedent-hidden? kb (jtms/rests-on j) pctx)
            (when (integer? inf)
              (when-let [rsx (p/get-sentex (:records kb) inf)]
                (rule-firing-blocked? kb inf rsx
@@ -1452,7 +1453,7 @@
                    (or (:violation adm)
                        ;; structural well-formedness of a special predicate the rule
                        ;; concluded — a derived `genl` edge can close a taxonomy cycle
-                       (special/wff-violation kb conseq)
+                       (special/wff-violation kb conseq pctx)
                        (checks/edge-stratification-violation kb conseq)))]
     (if v
       (do (violations/report kb
@@ -2154,9 +2155,9 @@
   firings confer, read off the record's `:defeasible` — the same authority the
   direction is read from, so a rule needs no separate index to know how it fires."
   [kb handle rsx]
-  (let [s (:sentence rsx)]
+  (let [antes (:antecedent rsx)]
     {:name handle :rule-handle handle :context (:context rsx)
-     :antecedents (rules/antecedents s) :consequent (rules/consequent s)
+     :antecedents antes :consequent (:consequent rsx)
      ;; A bare rule adds no defeasibility of its own, so it confers :monotonic and
      ;; the conclusion is capped by its weakest antecedent; a `set/defaultRule`
      ;; introduces defeasibility, so its conclusions are always :default.
@@ -2173,7 +2174,7 @@
      ;; ...and the negative antecedents a `closed_extent_predicate` grant reads as NAF —
      ;; withheld from the join and decided here, for the same reason and by the same
      ;; block/sweep/revive path (docs/naf.md)
-     :closed-extent (closed-extent-antecedents kb (rules/antecedents s))
+     :closed-extent (closed-extent-antecedents kb antes)
      ;; the aggregate antecedents and whatever consumes their output — evaluated per
      ;; placement context rather than in the join, since a census depends on where it
      ;; is taken and a comparison on one cannot run before it (docs/aggregate.md)
@@ -2287,8 +2288,8 @@
                             exc?    (some #(= :exception (:reason %)) entries)]
                         {:rule      rh
                          :sentence  (if-let [vm (:varmap rsx)]
-                                      (sx/originalize (:sentence rsx) vm)
-                                      (:sentence rsx))
+                                      (sx/originalize (sx/sentence-of rsx) vm)
+                                      (sx/sentence-of rsx))
                          :believed? (boolean (jtms/in? tms rh))
                          :placed    placed
                          :refused   (if over? :overflow (count entries))
@@ -2355,7 +2356,7 @@
   the answer it invalidated."
   [kb rule-handle rsx moved max-depth truncated]
   (let [qs (distinct (filter #(qualitative-antecedent kb %)
-                             (rules/antecedents (:sentence rsx))))]
+                             (:antecedent rsx)))]
     (if (or (empty? qs) (every? #(= :all %) (vals moved)))
       (fire-rule kb rule-handle max-depth truncated)
       (reduce (fn [nh q]
@@ -2730,89 +2731,93 @@
   *unproductive* join — a match search that yields nothing for a long time never reaches a
   firing — which is bounded by the extent it is scanning rather than by the corpus."
   [kb seed opts]
-  (let [{:keys [max-depth max-derivations on-progress progress-every-ms]}
-        (merge default-chain-opts opts)
-        interval  (* (long (or progress-every-ms default-progress-ms)) 1000000)
-        truncated (atom false)
-        ;; the run's own counters, off the loop vars so a report from inside a datum sees
-        ;; the same numbers the loop does.  Chaining is single-threaded (the one-writer
-        ;; contract), so a volatile is the whole of the synchronization needed.
-        placed    (volatile! 0)
-        pending   (volatile! (count seed))
-        reported  (volatile! (System/nanoTime))
-        report!   (fn [] (vreset! reported (System/nanoTime))
-                    (on-progress {:derived @placed :pending @pending}))
-        due?      (fn [] (>= (- (System/nanoTime) @reported) interval))
-        ;; the agenda's own order, recorded so a firing both sides could make is made
-        ;; once (`*agenda-arrivals*`).  A fresh map per run rather than an outer one
-        ;; reused, unlike the two caches beside it: these are positions in *this*
-        ;; agenda, and a nested run (an `:on-progress` callback may start one) has
-        ;; its own.
-        arrivals  (when *suppress-duplicate-firings* (java.util.HashMap.))
-        arrived   (volatile! 0)
-        arrive!   (fn [hs]
-                    (when arrivals
-                      (doseq [h hs] (.put ^java.util.Map arrivals h (vswap! arrived inc)))))]
-    ;; the tick is bound whether or not anybody is listening: it is also how the run
-    ;; counts what it derived, and the loop cannot see that between datums.
-    ;; The handle cache is engaged for the same scope, and for the reason that scope
-    ;; exists: a fixpoint asks "is this conclusion already stored?" once per witness, so
-    ;; a conclusion reached k ways is k walks of the trie to a handle this run minted
-    ;; itself.  Nothing is removed from the store inside a run — `settle` runs after it —
-    ;; so every entry stays true for as long as the cache is bound.
-    ;; The justification dedup index rides the same scope for the sibling question —
-    ;; "does this conclusion already hold this justification?", also asked once per
-    ;; witness — and the same argument covers it: nothing removes a justification
-    ;; inside a run, and the two paths that do (`jtms/retract!`, `jtms/sweep!`) clear
-    ;; it themselves.  It is scoped to this KB's TMS, so a nested run over another KB
-    ;; (an `:on-progress` callback may start one) gets its own index, not this one.
-    ;; The arrival ledger is the third thing on that scope, and it is the agenda's own
-    ;; order rather than a cache of anything — a datum is stamped as it is enqueued,
-    ;; before any datum behind it is processed, so the trigger of a pair is always the
-    ;; one the ledger sorts later.
-    (observe/with-handle-cache
-      (jtms/with-dedup-cache (:tms kb)
-        (binding [*tick* (fn [n]
-                           (vswap! placed + n)
-                           (when (and on-progress (due?)) (report!)))
-                  ;; the fourth thing on this scope, and the sibling of the handle cache
-                  ;; above it: a per-functor verdict on whether that cache is authoritative
-                  ;; (the store held nothing under the functor when the run began), so a
-                  ;; novel conclusion of a chain-only predicate skips the trie walk that
-                  ;; would only reconfirm the cache's own miss (`kb/find-sentex-handle`).
-                  ;; A fresh map per run, like `arrivals`: it is a claim about *this*
-                  ;; run's store, and a nested run gets its own.  Armed only for a bulk
-                  ;; frontier (`kb/chain-authority-min-frontier`) — an incremental assert's
-                  ;; one-fact seed concludes too little to repay the probe, so it stays nil
-                  ;; and `find-sentex-handle` walks the trie, which is the reference path.
-                  kb/*chain-authoritative-functors* (when (>= (count seed)
-                                                              kb/chain-authority-min-frontier)
-                                                      (java.util.HashMap.))
-                  ;; The KB's registered evaluatables, read once: the registry is fixed
-                  ;; for a run, and forward chaining reads this set on the hot join path to
-                  ;; treat an `add-evaluatable` predicate as a computed antecedent
-                  ;; (`deferred-antecedent?`).  A nested run over another KB rebinds it to
-                  ;; that KB's set.  Empty for the common KB with none.
-                  *evaluatable-preds* (provers/evaluatable-preds kb)
-                  ;; Whether the KB declares any preservation, read on the first join
-                  ;; that asks and forgotten when a firing places a declaration
-                  ;; (`note-placed-declaration!`) — per run, and a fresh cell per run
-                  ;; for the reason `arrivals` is.
-                  *declarations-cell* (volatile! nil)
-                  *agenda-arrivals* arrivals]
-          (arrive! seed)
-          (loop [agenda (into clojure.lang.PersistentQueue/EMPTY seed)]
-            (if (or (empty? agenda) (>= @placed max-derivations))
-              (do (vreset! pending (count agenda))
-                  (when on-progress (report!))
-                  {:derived @placed :truncated? (or @truncated (>= @placed max-derivations))})
-              (let [d       (peek agenda)
-                    new-hs  (process-datum kb d max-depth truncated)
-                    _       (arrive! new-hs)
-                    agenda' (into (pop agenda) new-hs)]
-                (vreset! pending (count agenda'))
-                (when (and on-progress (due?)) (report!))
-                (recur agenda')))))))))
+  ;; The generative join is `settle-phases`' `:chaining` centre — a bulk load fires it per
+  ;; assert, a `recover` not at all.  Wraps `chain` alone: `chain-all` and the settle
+  ;; re-chain both route through here, and the span nests cleanly when they do.
+  (phases/with-phase :chaining
+    (let [{:keys [max-depth max-derivations on-progress progress-every-ms]}
+          (merge default-chain-opts opts)
+          interval  (* (long (or progress-every-ms default-progress-ms)) 1000000)
+          truncated (atom false)
+          ;; the run's own counters, off the loop vars so a report from inside a datum sees
+          ;; the same numbers the loop does.  Chaining is single-threaded (the one-writer
+          ;; contract), so a volatile is the whole of the synchronization needed.
+          placed    (volatile! 0)
+          pending   (volatile! (count seed))
+          reported  (volatile! (System/nanoTime))
+          report!   (fn [] (vreset! reported (System/nanoTime))
+                      (on-progress {:derived @placed :pending @pending}))
+          due?      (fn [] (>= (- (System/nanoTime) @reported) interval))
+          ;; the agenda's own order, recorded so a firing both sides could make is made
+          ;; once (`*agenda-arrivals*`).  A fresh map per run rather than an outer one
+          ;; reused, unlike the two caches beside it: these are positions in *this*
+          ;; agenda, and a nested run (an `:on-progress` callback may start one) has
+          ;; its own.
+          arrivals  (when *suppress-duplicate-firings* (java.util.HashMap.))
+          arrived   (volatile! 0)
+          arrive!   (fn [hs]
+                      (when arrivals
+                        (doseq [h hs] (.put ^java.util.Map arrivals h (vswap! arrived inc)))))]
+      ;; the tick is bound whether or not anybody is listening: it is also how the run
+      ;; counts what it derived, and the loop cannot see that between datums.
+      ;; The handle cache is engaged for the same scope, and for the reason that scope
+      ;; exists: a fixpoint asks "is this conclusion already stored?" once per witness, so
+      ;; a conclusion reached k ways is k walks of the trie to a handle this run minted
+      ;; itself.  Nothing is removed from the store inside a run — `settle` runs after it —
+      ;; so every entry stays true for as long as the cache is bound.
+      ;; The justification dedup index rides the same scope for the sibling question —
+      ;; "does this conclusion already hold this justification?", also asked once per
+      ;; witness — and the same argument covers it: nothing removes a justification
+      ;; inside a run, and the two paths that do (`jtms/retract!`, `jtms/sweep!`) clear
+      ;; it themselves.  It is scoped to this KB's TMS, so a nested run over another KB
+      ;; (an `:on-progress` callback may start one) gets its own index, not this one.
+      ;; The arrival ledger is the third thing on that scope, and it is the agenda's own
+      ;; order rather than a cache of anything — a datum is stamped as it is enqueued,
+      ;; before any datum behind it is processed, so the trigger of a pair is always the
+      ;; one the ledger sorts later.
+      (observe/with-handle-cache
+        (jtms/with-dedup-cache (:tms kb)
+          (binding [*tick* (fn [n]
+                             (vswap! placed + n)
+                             (when (and on-progress (due?)) (report!)))
+                    ;; the fourth thing on this scope, and the sibling of the handle cache
+                    ;; above it: a per-functor verdict on whether that cache is authoritative
+                    ;; (the store held nothing under the functor when the run began), so a
+                    ;; novel conclusion of a chain-only predicate skips the trie walk that
+                    ;; would only reconfirm the cache's own miss (`kb/find-sentex-handle`).
+                    ;; A fresh map per run, like `arrivals`: it is a claim about *this*
+                    ;; run's store, and a nested run gets its own.  Armed only for a bulk
+                    ;; frontier (`kb/chain-authority-min-frontier`) — an incremental assert's
+                    ;; one-fact seed concludes too little to repay the probe, so it stays nil
+                    ;; and `find-sentex-handle` walks the trie, which is the reference path.
+                    kb/*chain-authoritative-functors* (when (>= (count seed)
+                                                                kb/chain-authority-min-frontier)
+                                                        (java.util.HashMap.))
+                    ;; The KB's registered evaluatables, read once: the registry is fixed
+                    ;; for a run, and forward chaining reads this set on the hot join path to
+                    ;; treat an `add-evaluatable` predicate as a computed antecedent
+                    ;; (`deferred-antecedent?`).  A nested run over another KB rebinds it to
+                    ;; that KB's set.  Empty for the common KB with none.
+                    *evaluatable-preds* (provers/evaluatable-preds kb)
+                    ;; Whether the KB declares any preservation, read on the first join
+                    ;; that asks and forgotten when a firing places a declaration
+                    ;; (`note-placed-declaration!`) — per run, and a fresh cell per run
+                    ;; for the reason `arrivals` is.
+                    *declarations-cell* (volatile! nil)
+                    *agenda-arrivals* arrivals]
+            (arrive! seed)
+            (loop [agenda (into clojure.lang.PersistentQueue/EMPTY seed)]
+              (if (or (empty? agenda) (>= @placed max-derivations))
+                (do (vreset! pending (count agenda))
+                    (when on-progress (report!))
+                    {:derived @placed :truncated? (or @truncated (>= @placed max-derivations))})
+                (let [d       (peek agenda)
+                      new-hs  (process-datum kb d max-depth truncated)
+                      _       (arrive! new-hs)
+                      agenda' (into (pop agenda) new-hs)]
+                  (vreset! pending (count agenda'))
+                  (when (and on-progress (due?)) (report!))
+                  (recur agenda'))))))))))
 
 (defn rerecord-refusals!
   "Rebuild the refusal record by re-firing every rule that can refuse a firing.

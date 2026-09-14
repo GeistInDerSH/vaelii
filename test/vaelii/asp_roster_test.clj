@@ -43,6 +43,7 @@
     'vaelii.constraint-solve-test
     'vaelii.koinii-schedule-test
     'vaelii.labeling-test
+    'vaelii.minimize-solve-test
     'vaelii.solve-context-test
     'vaelii.sudoku-solve-test
     'vaelii.tsp-solve-test})

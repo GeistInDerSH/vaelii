@@ -5,7 +5,7 @@
 
   nippy freezes a Clojure record by writing its **type tag and every field name** into
   the frame — so a store of 100M sentexes writes `vaelii.impl.sentex.LiteralSentex` and
-  `:sentence :context :id :polarity :strength` 100M times.  Measured on the real corpus,
+  `:sentence :context :id :strength` 100M times.  Measured on the real corpus,
   that scaffolding is **56% of the store** (87 of 155 B/record) and it says nothing a
   frame needs to carry: the field layout is a property of the code, identical in every
   frame.
@@ -33,18 +33,38 @@
   thousand predicate and individual names — is written into every one of the frames.  A
   tokenized frame replaces the s-expression fields with a varint byte string of ids from
   the durable dictionary (`vaelii.impl.disk.tokens`), 2.6× smaller again.  It is a
-  *fourth and fifth frame tag*, not a format change: a store can hold plain and tokenized
-  frames side by side, so enabling it costs no rewrite and disabling it leaves what is
-  already written readable."
+  separate pair of *frame tags*, not a format change: a store can hold plain and
+  tokenized frames side by side, so enabling it costs no rewrite and disabling it leaves
+  what is already written readable.
+
+  **No frame this codec writes carries a sign, and no rule frame carries a sentence.**  A
+  negative literal's sentence is `(not S)` and `sentex/negative?` reads that, so no
+  written frame holds a polarity field; a rule record holds its antecedent and consequent
+  and no sentence (`sentex/sentence-of` builds it), so a rule frame holds none either.
+  The older tags each carry one or both of those fields, and decoding reads past them."
   (:require [vaelii.impl.disk.tokens :as dtok]
             [vaelii.impl.jtms :as jtms]
             [vaelii.impl.sentex :as sx])
   (:import [java.io ByteArrayOutputStream]))
 
-(def ^:private literal-tag 0)
-(def ^:private rule-tag   1)
-(def ^:private literal-tok-tag 2)
-(def ^:private rule-tok-tag   3)
+;; Tags 0–3 hold a polarity field after the id, and their rule shapes hold the rule's
+;; sentence first.  4–7 are the same four shapes without the polarity field.  8 and 9 are
+;; the rule shapes without the sentence.  This codec writes 4, 6, 8 and 9, and reads all
+;; ten.
+(def ^:private polarity-literal-tag     0)
+(def ^:private polarity-rule-tag        1)
+(def ^:private polarity-literal-tok-tag 2)
+(def ^:private polarity-rule-tok-tag    3)
+(def ^:private literal-tag              4)
+(def ^:private sentence-rule-tag        5)
+(def ^:private literal-tok-tag          6)
+(def ^:private sentence-rule-tok-tag    7)
+(def ^:private rule-tag                 8)
+(def ^:private rule-tok-tag             9)
+
+(def ^:private tok-tags
+  #{literal-tok-tag sentence-rule-tok-tag rule-tok-tag
+    polarity-literal-tok-tag polarity-rule-tok-tag})
 
 ;; ---- sentexes -----------------------------------------------------------
 
@@ -53,56 +73,86 @@
   [sx]
   (condp instance? sx
     vaelii.impl.sentex.LiteralSentex
-    [literal-tag (:sentence sx) (:context sx) (:id sx) (:polarity sx) (:strength sx)]
+    [literal-tag (:sentence sx) (:context sx) (:id sx) (:strength sx)]
 
     vaelii.impl.sentex.RuleSentex
-    [rule-tag (:sentence sx) (:context sx) (:id sx) (:polarity sx) (:antecedent sx)
-     (:consequent sx) (:strength sx) (:varmap sx) (:direction sx) (:defeasible sx)
-     (:assumption sx) (:constraint sx)]
+    [rule-tag (:context sx) (:id sx) (:antecedent sx) (:consequent sx) (:strength sx)
+     (:varmap sx) (:direction sx) (:defeasible sx) (:assumption sx) (:constraint sx)]
 
     sx))
 
 (defn decode-sentex
   "The inverse of `encode-sentex`: a positional vector back to its record (symbols
-  interned), anything else as it thawed."
+  interned), a record nippy froze whole back without its `:polarity` and a rule's
+  `:sentence` keys, anything else as it thawed."
   [v]
-  (if-not (vector? v)
+  (cond
+    (instance? vaelii.impl.sentex.LiteralSentex v)
+    (dissoc v :polarity)
+
+    (instance? vaelii.impl.sentex.RuleSentex v)
+    (dissoc v :polarity :sentence)
+
+    (not (vector? v))
     v
+
+    :else
     (let [f (fn [i] (sx/intern-deep (nth v i)))
           tag (nth v 0)]
       (cond
-        (= rule-tag tag)
-        (sx/->RuleSentex (f 1) (f 2) (nth v 3) (nth v 4) (f 5) (f 6) (nth v 7) (f 8)
-                         (nth v 9) (nth v 10) (nth v 11) (nth v 12))
         (= literal-tag tag)
-        (sx/->LiteralSentex (f 1) (f 2) (nth v 3) (nth v 4) (nth v 5))
+        (sx/->LiteralSentex (f 1) (f 2) (nth v 3) (nth v 4))
+        (= rule-tag tag)
+        (sx/->RuleSentex (f 1) (nth v 2) (f 3) (f 4) (nth v 5) (f 6)
+                         (nth v 7) (nth v 8) (nth v 9) (nth v 10))
+        ;; the rule's sentence sits at 1 and is read past
+        (= sentence-rule-tag tag)
+        (sx/->RuleSentex (f 2) (nth v 3) (f 4) (f 5) (nth v 6) (f 7)
+                         (nth v 8) (nth v 9) (nth v 10) (nth v 11))
+        ;; the polarity field sits at 4 and is read past, and a rule's sentence at 1
+        (= polarity-literal-tag tag)
+        (sx/->LiteralSentex (f 1) (f 2) (nth v 3) (nth v 5))
+        (= polarity-rule-tag tag)
+        (sx/->RuleSentex (f 2) (nth v 3) (f 5) (f 6) (nth v 7) (f 8)
+                         (nth v 9) (nth v 10) (nth v 11) (nth v 12))
         ;; a tag this build does not read is a frame from some other build — refused
         ;; by name, never misread as a literal record whose fields land in the wrong
         ;; slots (the tokenized tags decode on their own path, dictionary in hand)
         :else
         (throw (ex-info (str "unknown sentex frame tag " (pr-str tag) " — this path reads"
-                             " tag " literal-tag " (literal) and " rule-tag " (rule), and"
-                             " the two tokenized twins decode with the dictionary in"
-                             " hand; a tag outside those four is a frame some other build"
-                             " wrote")
+                             " tags " polarity-literal-tag ", " polarity-rule-tag ", "
+                             literal-tag ", " sentence-rule-tag " and " rule-tag ", and the"
+                             " five tokenized tags decode with the dictionary in hand; a"
+                             " tag outside those ten is a frame some other build wrote")
                         {:type :unknown-frame :tag tag}))))))
 
 ;; ---- justifications ---------------------------------------------------------
-;; One shape, so the frame needs no tag.
+;; One shape written, so the frame needs no tag.  A seven-element frame carries an
+;; always-empty `:out` set in its last position, and a record frame (nippy froze the
+;; record itself) an `:out` key; decoding drops both.  `jtms/->just` takes a rule-handle
+;; informant out of the antecedents, so every frame decodes to the one record shape.
 
 (defn encode-justification
   "A `Justification` as a positional vector; anything else unchanged."
   [d]
   (if (instance? vaelii.impl.jtms.Justification d)
-    [(:id d) (:informant d) (:antecedents d) (:consequence d) (:bindings d)
-     (:strength d) (:out d)]
+    [(:id d) (:informant d) (:antecedents d) (:consequence d) (:bindings d) (:strength d)]
     d))
 
-(defn decode-justification [v]
-  (if-not (vector? v)
-    v
-    (jtms/->Justification (nth v 0) (sx/intern-deep (nth v 1)) (nth v 2) (nth v 3)
-                          (sx/intern-deep (nth v 4)) (nth v 5) (nth v 6))))
+(defn decode-justification
+  "The inverse of `encode-justification`, for the six- and seven-element frames and for a
+  frozen record; anything else as it thawed."
+  [v]
+  (cond
+    (vector? v)
+    (jtms/->just (nth v 0) (sx/intern-deep (nth v 1)) (nth v 2) (nth v 3)
+                 (sx/intern-deep (nth v 4)) (nth v 5))
+
+    (instance? vaelii.impl.jtms.Justification v)
+    (jtms/->just (:id v) (:informant v) (:antecedents v) (:consequence v) (:bindings v)
+                 (:strength v))
+
+    :else v))
 
 ;; ---- tokenized bodies ---------------------------------------------------
 ;; A body is walked in prefix order into one int stream: an interned symbol/keyword is
@@ -226,11 +276,11 @@
 (defn- encode-sentex-tok [dict sx]
   (condp instance? sx
     vaelii.impl.sentex.LiteralSentex
-    (let [[bs lits] (encode-body dict [(:sentence sx) (:context sx) (:polarity sx) (:strength sx)])]
+    (let [[bs lits] (encode-body dict [(:sentence sx) (:context sx) (:strength sx)])]
       [literal-tok-tag bs lits (:id sx)])
 
     vaelii.impl.sentex.RuleSentex
-    (let [[bs lits] (encode-body dict [(:sentence sx) (:context sx) (:polarity sx)
+    (let [[bs lits] (encode-body dict [(:context sx)
                                        (:antecedent sx) (:consequent sx) (:strength sx)
                                        (:varmap sx) (:direction sx) (:defeasible sx)
                                        (:assumption sx) (:constraint sx)])]
@@ -241,17 +291,26 @@
 (defn- decode-sentex-tok [dict v]
   ;; read the fields into named locals in the order they were written — `let` makes the
   ;; correspondence with the encoder checkable, where positional constructor arguments
-  ;; would leave it resting on evaluation order
-  (let [rd (body-reader dict (nth v 1) (nth v 2))
-        id (nth v 3)]
-    (if (== (long (nth v 0)) (long rule-tok-tag))
-      (let [sentence (rd) context (rd) polarity (rd) antecedent (rd) consequent (rd)
-            strength (rd) varmap (rd) direction (rd) defeasible (rd)
-            assumption (rd) constraint (rd)]
-        (sx/->RuleSentex sentence context id polarity antecedent consequent strength varmap
+  ;; would leave it resting on evaluation order.  An older rule body leads with the
+  ;; rule's sentence, and a polarity-tagged body carries the sign after the context; each
+  ;; is read into an `_`-named local and dropped.
+  (let [rd        (body-reader dict (nth v 1) (nth v 2))
+        id        (nth v 3)
+        tag       (long (nth v 0))
+        signed?   (or (== tag (long polarity-rule-tok-tag))
+                      (== tag (long polarity-literal-tok-tag)))
+        sign      (fn [] (when signed? (rd)))
+        rule?     (or (== tag (long rule-tok-tag)) (== tag (long sentence-rule-tok-tag))
+                      (== tag (long polarity-rule-tok-tag)))
+        sentence? (not (== tag (long rule-tok-tag)))]
+    (if rule?
+      (let [_sentence (when sentence? (rd)) context (rd) _polarity (sign)
+            antecedent (rd) consequent (rd) strength (rd) varmap (rd) direction (rd)
+            defeasible (rd) assumption (rd) constraint (rd)]
+        (sx/->RuleSentex context id antecedent consequent strength varmap
                          direction defeasible assumption constraint))
-      (let [sentence (rd) context (rd) polarity (rd) strength (rd)]
-        (sx/->LiteralSentex sentence context id polarity strength)))))
+      (let [sentence (rd) context (rd) _polarity (sign) strength (rd)]
+        (sx/->LiteralSentex sentence context id strength)))))
 
 ;; ---- the per-kind table -------------------------------------------------
 
@@ -260,7 +319,7 @@
    ;; reading is never conditional: the frame's own tag says which shape it is, so a
    ;; store holding plain, tokenized and pre-codec frames at once reads all three
    :dec (fn [v]
-          (if (and (vector? v) (#{literal-tok-tag rule-tok-tag} (nth v 0)))
+          (if (and (vector? v) (tok-tags (nth v 0)))
             (decode-sentex-tok dict v)
             (decode-sentex v)))})
 
@@ -268,7 +327,7 @@
   "Whether a thawed frame spells its body as dictionary ids — what a store must have a
   dictionary to read."
   [v]
-  (boolean (and (vector? v) (#{literal-tok-tag rule-tok-tag} (nth v 0)))))
+  (boolean (and (vector? v) (tok-tags (nth v 0)))))
 
 (defn by-kind
   "`kind-name -> {:enc :dec}` for a store.  `dict` is its durable token dictionary, which

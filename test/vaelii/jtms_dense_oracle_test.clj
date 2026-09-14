@@ -562,23 +562,45 @@
 
 (deftest a-justification-round-trips-through-the-columns
   (testing "every field belief reads survives being taken apart and put back"
-    ;; The informant (7) is also an antecedent, and a *weaker* premise than the rest:
-    ;; `conferred-class` has to skip it, so 4 comes out :monotonic instead of capped at
-    ;; the rule's own class.  That is the one place the informant is read for something
-    ;; other than equality, and the only one that can tell an int column from an
-    ;; object one.
-    (is (= [10 7 [1 2 7] 4 :monotonic #{3} :monotonic]
+    ;; The informant (7) is handed over among the antecedents, as a firing's handle list
+    ;; has it, and the record keeps it once, as the informant.  It is a *weaker* premise
+    ;; than the rest and the cap does not read it, so 4 comes out :monotonic instead of
+    ;; capped at the rule's own class.  That is the one place the informant is read for
+    ;; something other than equality, and the only one that can tell an int column from
+    ;; an object one.
+    (is (= [10 7 [1 2] 4 :monotonic :monotonic]
            (both (fn [t]
                    (jtms/add-premise t 1 :monotonic)
                    (jtms/add-premise t 2 :monotonic)
                    (jtms/add-premise t 7 :default)
-                   (jtms/ensure-node t 3 0)               ; OUT: the NAF antecedent
                    (jtms/ensure-node t 4 1)
-                   (jtms/add-justification
-                    t (assoc (jtms/->just 10 7 [1 2 7] 4 {} :monotonic) :out #{3})))
+                   (jtms/add-justification t (jtms/->just 10 7 [1 2 7] 4 {} :monotonic)))
                  (fn [t] (let [j (jtms/justification t 10)]
                            [(:id j) (:informant j) (:antecedents j) (:consequence j)
-                            (:strength j) (:out j) (jtms/defeat-class t 4)]))))))
+                            (:strength j) (jtms/defeat-class t 4)]))))))
+  (testing "a rule-handle informant is a condition of validity"
+    ;; 7 is named only as the informant, so `valid?` and the adjacency are all that tie 4
+    ;; to it: suspending 7 takes 4 OUT, and restoring 7 brings 4 back.
+    (is (= [true false true]
+           (both (fn [t]
+                   (jtms/add-premise t 1 :monotonic)
+                   (jtms/add-premise t 7 :monotonic)
+                   (jtms/ensure-node t 4 1)
+                   (jtms/add-justification t (jtms/->just 10 7 [1] 4 {} :monotonic)))
+                 (fn [t] (let [before (jtms/in? t 4)
+                               _      (jtms/suspend-premise t 7)
+                               during (jtms/in? t 4)
+                               _      (jtms/add-premise t 7 :monotonic)]
+                           [before during (jtms/in? t 4)]))))))
+  (testing "retracting the rule sweeps what it licensed"
+    (is (= [false #{}]
+           (both (fn [t]
+                   (jtms/add-premise t 1 :monotonic)
+                   (jtms/add-premise t 7 :monotonic)
+                   (jtms/ensure-node t 4 1)
+                   (jtms/add-justification t (jtms/->just 10 7 [1] 4 {} :monotonic)))
+                 (fn [t] (jtms/retract! t 7)
+                   [(jtms/known-datum? t 4) (jtms/dependents t 1)])))))
   (testing "a symbolic informant is not a handle, and comes back as itself"
     ;; `special` licenses merges and lifts under a predicate *name* rather than a rule
     ;; handle, so the informant column cannot assume an integer.
@@ -591,22 +613,23 @@
 
 (deftest a-swept-justification-leaves-no-column-behind
   (testing "an id reused after a sweep inherits nothing from its predecessor"
-    ;; Seven columns are torn down by hand where a map holds one entry, so a missed
-    ;; one is a stale field waiting for the next justification to take the id.
-    ;; Re-issuing 10 with a different informant, strength, antecedents and `out` reads
-    ;; back whatever the sweep failed to clear.
-    (is (= [(jtms/->just 10 'fresh [5] 6 nil :default) :default #{10} #{10}]
+    ;; Six columns are torn down by hand where a map holds one entry, so a missed one is
+    ;; a stale field waiting for the next justification to take the id.  Re-issuing 10
+    ;; with a different informant, strength and antecedents reads back whatever the sweep
+    ;; failed to clear — and the swept one's rule (3) must not keep it as a dependent.
+    (is (= [(jtms/->just 10 'fresh [5] 6 nil :default) :default #{10} #{10} #{}]
            (both (fn [t]
                    (jtms/add-premise t 1 :monotonic)
+                   (jtms/add-premise t 3 :monotonic)
                    (jtms/ensure-node t 2 1)
-                   (jtms/add-justification
-                    t (assoc (jtms/->just 10 'gone [1] 2 {} :monotonic) :out #{1}))
+                   (jtms/add-justification t (jtms/->just 10 3 [1] 2 {} :monotonic))
                    (jtms/retract! t 1)                      ; 2 ungroundable => both swept
                    (jtms/add-premise t 5 :default)
                    (jtms/ensure-node t 6 1)
                    (jtms/add-justification t (jtms/->just 10 'fresh [5] 6 {} :default)))
                  (fn [t] [(jtms/justification t 10) (jtms/defeat-class t 6)
-                          (jtms/supports t 6) (jtms/dependents t 5)]))))))
+                          (jtms/supports t 6) (jtms/dependents t 5)
+                          (jtms/dependents t 3)]))))))
 
 (deftest reads-are-total
   (testing "every read answers an unknown datum — nil included — as absent"
@@ -648,7 +671,7 @@
         (jtms/add-premise t 1 :default)
         (jtms/ensure-node t 2 1)
         (let [ex (try (jtms/add-justification
-                       t (jtms/->Justification over :rule [1] 2 nil :default #{}))
+                       t (jtms/->just over :rule [1] 2 nil :default))
                       nil (catch clojure.lang.ExceptionInfo e e))]
           (is (= "justification id" (:kind (ex-data ex))))
           (is (= :handle-ceiling (:type (ex-data ex))) "one type for both entry points")

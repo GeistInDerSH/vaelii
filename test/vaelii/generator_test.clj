@@ -56,9 +56,9 @@
     (testing "one stamped rule per fill, and no more"
       (is (= 2 (count (stamped kb 'CxUniverse)))))
     (testing "the hole is ground in the mint and the stamped rule keeps its own variables"
-      (let [s (:sentence (first (filter #(some #{succeededAt}
-                                               (vr/antecedent-predicates (:sentence %)))
-                                        (stamped kb 'CxUniverse))))]
+      (let [s (v/sentence-of (first (filter #(some #{succeededAt}
+                                                   (vr/antecedent-keys (:antecedent %)))
+                                            (stamped kb 'CxUniverse))))]
         (is (some? s) "a rule was stamped for succeededAt")
         ;; the stamped rule's own `?a` / `?p` survive as variables — canonically
         ;; renumbered, but variables
@@ -367,8 +367,8 @@
     (testing "the type-level fact stamps the rule the mint was for"
       (v/assert kb (list capType bird flying) 'CxUniverse)
       (is (= 1 (count (stamped kb 'CxUniverse))))
-      (is (= bird (first (vr/antecedent-predicates
-                          (:sentence (first (stamped kb 'CxUniverse))))))
+      (is (= bird (first (vr/antecedent-keys
+                          (:antecedent (first (stamped kb 'CxUniverse))))))
           "keyed on the type, which was a variable two levels up"))
     (testing "and the instance-level conclusion follows"
       (v/assert kb (list bird Tweety) 'CxUniverse)
@@ -544,7 +544,7 @@
     (is (= 2 (count (stamped kb 'CxUniverse)))
         "one stamped rule per conjunct")
     (is (= #{dstA dstB}
-           (into #{} (map #(vr/consequent-predicate (:sentence %)))
+           (into #{} (map #(vr/consequent-key (:consequent %)))
                  (stamped kb 'CxUniverse))))))
 
 (tu/deftest-kb a-mint-is-reachable-by-the-index-both-ways
@@ -578,7 +578,7 @@
       (let [sx (first (stamped kb 'CxUniverse))]
         (is (some? sx) "the generator stamped a rule")
         (is (false? (v/premise? kb (:id sx))) "a conclusion, resting on the generator")
-        (let [h (v/assert kb (:sentence sx) 'CxUniverse {:strength :monotonic})]
+        (let [h (v/assert kb (v/sentence-of sx) 'CxUniverse {:strength :monotonic})]
           (is (= (:id sx) h) "one rule, one handle — the assertion is not a second sentex")
           (is (true? (v/premise? kb h)) "and now a premise in its own right")
           (is (= :monotonic (:strength (v/sentex kb h)))))

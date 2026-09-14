@@ -54,6 +54,7 @@
   (:require
    [vaelii.impl.asp.edge :as edge]
    [vaelii.impl.asp.solver :as solver]
+   [vaelii.impl.config :as config]
    [vaelii.impl.jtms :as jtms]
    [vaelii.impl.kb :as kb]
    [vaelii.impl.naming :as nm]
@@ -110,6 +111,185 @@
     (solve/program (into #{} (mapcat :nogood) ds)
                    (mapv #(select-keys % [:nogood :priority :sentence]) ds)
                    (sides-content ds))))
+
+(defn- cluster-indices
+  "Partition `[0 n)` into connected components under `edges` — a seq of `[i j]` index pairs
+  to union — returned as a seq of index sets.  Union-find, so two nogoods joined by any edge,
+  directly or through a chain, land in one cluster and are enumerated together."
+  [n edges]
+  (let [^ints parent (int-array n)]
+    (dotimes [i n] (aset parent i i))
+    (letfn [(root [i] (let [p (aget parent i)]
+                        (if (= p i) i (let [r (root p)] (aset parent (int i) (int r)) r))))]
+      (doseq [[i j] edges]
+        (aset parent (root i) (int (root j))))
+      (->> (range n) (group-by root) vals (map set)))))
+
+(defn- k-subsets
+  "The size-`k` subsets of `coll` (a vector), each a seq — a plain combinations generator."
+  [coll k]
+  (cond
+    (zero? k)    (list ())
+    (< (count coll) k) nil
+    :else        (let [[x & xs] coll]
+                   (concat (map #(cons x %) (k-subsets (vec xs) (dec k)))
+                           (k-subsets (vec xs) k)))))
+
+(defn- binomial
+  "C(`n`, `k`), exact: each step's product is divisible by the step's divisor."
+  [n k]
+  (reduce (fn [acc i] (/ (*' acc (- n i)) (inc i))) 1 (range k)))
+
+(defn- min-resolutions
+  "Every minimum-cardinality subset of `members` whose forcing OUT satisfies every nogood in
+  `ngs` (each a member set) — a nogood is satisfied once not all its members remain believed
+  under the forcing.  `holds?` reads belief under a forced-out set: `(holds? s m)` is true
+  while member `m` is believed with `s` forced OUT.
+
+  Iterated by increasing size, so the first size with a satisfying subset yields every
+  optimal resolution — genuinely tied optima all return.  Iterating whole subsets rather than
+  branching on one nogood's members is what makes it **belief-faithful**: a member a defeat
+  drops by cascade counts as forced OUT and needs no defeat of its own, so a subset that
+  forces no member of a nogood can still satisfy it — forcing `pb` OUT satisfies `pa`'s nogood
+  when `¬pa` is derived from `pb`.  Returns nil when the subsets examined would exceed
+  `VAELII_CLASSIFY_RESOLUTION_BUDGET` (the caller then leaves the cluster `:supportable`).
+  Each size's count is computed as a binomial before its subsets are generated, so the
+  enumeration never generates a size that would cross the budget."
+  [members ngs holds?]
+  (let [members (vec members)
+        m       (count members)
+        budget  (config/classify-resolution-budget)
+        sat?    (fn [s] (not-any? (fn [ng] (every? #(holds? s %) ng)) ngs))]
+    (loop [k 1, seen (num 0)]                        ; boxed: a binomial can pass Long/MAX_VALUE
+      (if (> k m)
+        []                                           ; forcing every member out always satisfies
+        (let [seen' (+' seen (binomial m k))]
+          (if (> seen' budget)
+            nil
+            (let [sols (into [] (comp (map set) (filter sat?)) (k-subsets members k))]
+              (if (seq sols) sols (recur (inc k) seen')))))))))
+
+(defn classify-local
+  "A skeptical/credulous classification of the KB's current dilemmas, read from the JTMS
+  dependency graph — **no answer-set enumeration, no backend**.  Returns the `classify`
+  shape `{:true #{} :supportable #{} :false #{}}`, or nil when the KB reports no dilemma.
+
+  A **resolution** forces OUT a minimum-cardinality set of dilemma members that satisfies
+  every nogood (leaves no nogood with all its members still believed); the resolutions are a
+  dilemma set's optimal labelings.  A believed datum is classified by which resolutions
+  keep it, read through `jtms/grounded-in-region` (belief recomputed with a set forced OUT):
+
+  - `:true` — believed under **every** resolution (skeptical/cautious);
+  - `:supportable` — believed under **some** but not every resolution (credulous/brave);
+  - `:false` — believed under **no** resolution: currently believed only because base belief
+    holds conflicting dilemma sides at once, which no single resolution does.  A
+    `(weird N)` drawn from `(and (pac N) (not (pac N)))` is that case.
+
+  `(hasEthicalStance N)` drawn from **both** the pacifist and non-pacifist side is `:true` —
+  every resolution keeps one side, so one support survives.  `(opposesWar N)` resting on the
+  pacifist side alone is `:supportable`.  It covers derived conclusions, not only the
+  dilemma members a `Program` holds — where the member-only `classify-program` leaves a
+  derived conclusion to base belief (which believes both sides and so overclaims it
+  cautious).
+
+  **Coupled dilemmas are enumerated together, independent ones apart.**  Nogoods that share
+  a member, or move a member of each other, form one cluster (`cluster-indices`); a cluster's
+  resolutions come from `min-resolutions`.  A datum is classified by the joint resolutions of
+  the clusters that move it — the cartesian product of those clusters' optima, since a cluster
+  that does not move the datum leaves it at base whatever it resolves to.  A `(f N)` from
+  `(and (e1 N) (e2 N))`, where `e1` and `e2` are each `:true` in a separate diamond, is `:true`:
+  it survives every combination.  A datum whose product of clusters exceeds
+  `VAELII_CLASSIFY_MAX_JOINT_OPTIMA`, or that touches a cluster larger than
+  `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS`, is left `:supportable` — sound,
+  and a backend is the tool for a large interacting set.  So the cost is the clusters'
+  consequence closures: linear in the number of **independent** dilemmas
+  (`grounded_forcing_out_test`), exponential only inside one interacting cluster or across the
+  clusters one datum joins, and capped at both.  See docs/labeling.md."
+  [kb]
+  (let [tms     (:tms kb)
+        nogoods (into []
+                      (keep (fn [ng]
+                              (let [ms (into #{}
+                                             (filter #(= :default (jtms/defeat-class tms %)))
+                                             (:nogood ng))]
+                                (when (seq ms) ms))))
+                      (settle/contradictions-of kb))]
+    (when (seq nogoods)
+      (let [n           (count nogoods)
+            max-members (config/classify-max-cluster-members)
+            max-optima  (config/classify-max-joint-optima)
+            in?    #(jtms/in? tms %)
+            gir    (memoize #(jtms/grounded-in-region tms %))
+            ;; does `d` stay believed when `extra` is forced OUT?  Region-local: a datum the
+            ;; forcing does not reach keeps its live belief.
+            holds? (fn [extra d]
+                     (let [{:keys [region in]} (gir extra)]
+                       (if (contains? region d) (contains? in d) (in? d))))
+            ;; the believed datums a set of forced-out members moves
+            moved  (fn [extra]
+                     (let [{:keys [region in]} (gir extra)]
+                       (into #{} (filter #(and (in? %) (not (contains? in %)))) region)))
+            ;; every believed datum some dilemma moves, and the datums each dilemma moves
+            dependent (moved (reduce into #{} nogoods))
+            dep       (mapv moved nogoods)
+            ;; datum -> the nogood indices whose forcing moves it (a nogood's own members
+            ;; among them, since forcing a nogood OUT moves its members)
+            touch     (persistent!
+                       (reduce (fn [m i]
+                                 (reduce (fn [m d] (assoc! m d (conj (get m d #{}) i)))
+                                         m (dep i)))
+                               (transient {}) (range n)))
+            ;; two nogoods couple when a member of one is moved by forcing the other — shared
+            ;; members and derivation coupling both.  Union through `touch` rather than
+            ;; comparing every pair, so clustering is linear in the members, not quadratic in
+            ;; the nogoods.
+            edges     (for [j (range n), m (nogoods j), i (touch m)] [i j])
+            clusters  (cluster-indices n edges)
+            cluster-of (into {} (mapcat (fn [c] (map (fn [i] [i c]) c))) clusters)
+            ;; a cluster's optimal resolutions, or nil when too large / over budget
+            optima    (into {}
+                            (map (fn [c]
+                                   (let [ms (reduce into #{} (map nogoods c))]
+                                     [c (when (<= (count ms) max-members)
+                                          (min-resolutions ms (mapv nogoods c) holds?))])))
+                            clusters)
+            ;; the joint resolutions of `cs` — the clusters that move a datum — as forced
+            ;; sets: the cartesian product of their optima, each combination unioned into one
+            ;; set.  A cluster that does not move the datum leaves it at base whatever it
+            ;; resolves to, so ranging over `cs` alone reaches the datum's every joint optimum.
+            ;; nil when a cluster is unenumerated or the product exceeds `max-optima`.
+            joint  (fn [cs]
+                     (reduce (fn [acc c]
+                               (let [opt (optima c)]
+                                 (when (and acc opt
+                                            (<= (* (count acc) (count opt)) max-optima))
+                                   (vec (for [a acc, s opt] (into a s))))))
+                             [#{}] cs))
+            classify-one
+            (fn [d]
+              (let [cs (into #{} (map cluster-of) (get touch d #{}))]
+                (if-let [combos (and (seq cs) (joint cs))]
+                  (let [hs (map (fn [s] (holds? s d)) combos)]
+                    (cond (every? true? hs) :true
+                          (some true? hs)   :supportable
+                          :else             :false))
+                  ;; touches no dilemma alone (only the joint forcing), or a cluster too large
+                  ;; to enumerate: its class needs joint resolutions a backend enumerates
+                  :supportable)))
+            grouped (group-by classify-one dependent)]
+        {:true        (into #{} (:true grouped))
+         :supportable (into #{} (:supportable grouped))
+         :false       (into #{} (:false grouped))}))))
+
+(defn classify-dilemmas
+  "Classify the KB's current dilemmas into `:true`/`:supportable`/`:false` — through the
+  ASP backend when one is reachable (exact: `classify-program` over `dilemma-program`),
+  and otherwise the solve-free JTMS bracket (`classify-local`).  nil when there is no
+  dilemma to classify.  The `(bravely S)` / `(cautiously S)` prover reads this."
+  [kb]
+  (if (solver/available?)
+    (some-> (dilemma-program kb) classify-program)
+    (classify-local kb)))
 
 (defn- labeling-solver
   "The solver the labeling solve must use: the **ASP edge solver whenever a backend is

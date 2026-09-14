@@ -73,19 +73,17 @@
   ;; list grew"
   (tu/with-terms [bird flies Tweety CxOne]
     (v/assert kb (list 'genlCx CxOne 'CxUniverse) 'CxUniverse)
-    (v/assert kb (list 'implies (list bird '?x) (list flies '?x)) CxOne {:direction :forward})
-    (v/assert kb (list bird Tweety) CxOne)
-    (let [derived (v/handle-of kb (list flies Tweety) CxOne)
-          antes   (:antecedents (first (v/supporting-justifications kb derived)))
-          named   (into #{} (map #(:sentence (v/sentex kb %))) antes)]
+    (let [rh      (v/assert kb (list 'implies (list bird '?x) (list flies '?x)) CxOne
+                            {:direction :forward})
+          _       (v/assert kb (list bird Tweety) CxOne)
+          derived (v/handle-of kb (list flies Tweety) CxOne)
+          j       (first (v/supporting-justifications kb derived))
+          named   (into #{} (map #(:sentence (v/sentex kb %))) (:antecedents j))]
       ;; *which* sentexes, not how many: this file's whole subject is which ingredients a
-      ;; placement rests on, and a count of two is equally true of the wrong two.  The
-      ;; rule is matched on its shape rather than as written, a stored rule being
-      ;; canonically renumbered (`?x` reads back `?var0`).
-      (is (= 2 (count named)))
-      (is (contains? named (list bird Tweety)) "the fact itself")
-      (is (some #(and (seq? %) (= 'implies (first %)) (= bird (ffirst (rest %)))) named)
-          "and the rule that fired, not some other justification's")
+      ;; placement rests on, and a count of one is equally true of the wrong one.  The
+      ;; rule is the justification's informant, never one of its antecedents.
+      (is (= #{(list bird Tweety)} named) "the fact itself, and nothing else")
+      (is (= rh (:informant j)) "and the rule that fired, not some other justification's")
       (is (not-any? #(and (seq? %) (= 'genlCx (first %))) named)
           "and no context edge, the placement reaching its ingredients reflexively"))))
 

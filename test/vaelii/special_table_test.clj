@@ -12,6 +12,7 @@
   fixture is either."
   (:require [clojure.spec.alpha :as s]
             [clojure.test :refer [deftest is testing]]
+            [vaelii.impl.predicates :as pr]
             [vaelii.impl.spec :as vspec]
             [vaelii.impl.special :as special]))
 
@@ -185,5 +186,43 @@
           "one word for one bad table — the caller catching it is the namespace load")
       (is (= :enumeration (:mismatch data))
           ":mismatch is what says which validator refused it")))
+  (testing "an arm keyed on a functor no declaration places in the table is refused —
+            the direction the live join reads off the arms map, since a stray arm never
+            reaches the filtered entries the one-argument arity would read"
+    ;; The two-argument arity is the one `entries` calls, handing it `(set (keys arms))`.
+    ;; A stray functor in that set is armed with no declaration, and must be refused rather
+    ;; than dropped from the join.
+    (let [data (try (special/check-declarations
+                     special/entries
+                     (conj (set (map first special/entries)) 'strayArm))
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :enumeration (:mismatch data)))
+      (is (= '[strayArm] (:undeclared data)))))
   (testing "the live table passes, which namespace load already proved"
     (is (= special/entries (special/check-declarations special/entries)))))
+
+(deftest the-live-join-reads-every-arm-off-a-declaration
+  ;; `entries` filters `predicates/entries` to `pr/in-special-table` before it looks an
+  ;; arm up, so an arm keyed on a functor absent from that set is dropped from the join.
+  ;; The load check reads the arm functors off the `arms` map — not off the filtered
+  ;; vector — so such a stray arm is refused rather than left out unreported.
+  (testing "no stray arm today: every armed functor is a declared table functor"
+    (is (= (set (keys @#'special/arms)) pr/in-special-table)))
+  (testing "and the construction refuses one that is added"
+    ;; the def is evaluated once at load, so rebuild the exact construction it uses with
+    ;; one stray arm and drive the same check the def drives.
+    (let [arms  @#'special/arms
+          dh    #'special/declared-half
+          stray (assoc arms 'strayArm {:wff (fn [_ _ _])})
+          built (into [] (comp (map first)
+                               (filter pr/in-special-table)
+                               (map (fn [f] [f (merge (dh f) (stray f))])))
+                      pr/entries)
+          data  (try (special/check-declarations built (set (keys stray)))
+                     (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :bad-table-entry (:type data)))
+      (is (= :enumeration (:mismatch data)))
+      (is (= '[strayArm] (:undeclared data)))
+      (is (not (some #(= 'strayArm (first %)) built))
+          "the stray arm was dropped from the join, which is why the check must read the
+           arms map and not the filtered vector"))))

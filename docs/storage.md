@@ -169,10 +169,10 @@ and `enumeration_shape_test` is where core proves it: one session run
 against a store answering rosters and one answering Clojure sets, compared at the KB level
 — beliefs, answers, `reindex`, `recover`, `export!` — rather than at the protocol call.
 
-**The engine's own stores answer Clojure sets**, because that is what most of their own
-state already is — the memory store's key set, the disk store's premise set. What each
-*holds* is a separate question from what it answers, and the disk store's live-handle sets
-are the one place the two come apart.
+**The engine's own stores answer Clojure sets**, because that is what the memory store's
+own state already is — its key set and its premise set. What each *holds* is a separate
+question from what it answers, and the disk store's live-handle sets and premise set are
+where the two come apart.
 
 **The disk store holds its live handles as compressed bitmaps.** One per kind — sentexes,
 justifications, provenance — resident for as long as the store is open, and the four
@@ -187,9 +187,10 @@ before a single record is fetched. The same handles as a `Roaring64Bitmap` measu
 `next-id` mints in assertion order, so a kind's live set is a strided run through the
 handle space with holes where records were deleted.
 
-`sentex-ids` still hands back a `PersistentHashSet<Long>`, built from a snapshot at the
-call — so no caller can tell, and the *call* still allocates the extent even though
-holding it no longer does. That allocation is the entry point's, not the store's.
+`sentex-ids`, `justification-ids` and `premise-ids` hand back the snapshot itself, an
+immutable `HandleRoster`, so a call allocates the bitmap's size rather than the extent. A
+caller that wants `conj`, `disj` or `clojure.set` converts with `(set …)` and pays the
+extent at that call site.
 
 The bitmap is mutated in place and is not thread-safe, so **a read of the live set takes
 the kind lock**, which the boxed set did not need. That is the whole price: a tally and a
@@ -201,9 +202,21 @@ measured, not theoretical: an iterator over a bitmap being written throws
 trie to restructure under it, which a store whose handles interleave with two other kinds'
 is (`disk_record_store_test`, the live roster beside a writer).
 
-The premise set is still a `PersistentHashSet<Long>` and still resident, and it needs
-neither monitor on the write path — one `swap!` on one atom, and the pair that matters is
-a `kill!` the writer makes on the thread that reads it back.
+The kind lock is a `ReentrantReadWriteLock`, not a bare monitor. The live-set read above,
+and every write — `store!`, `kill!`, `mark-premise`, compaction, `close` — take it
+exclusively (the *write* lock, the same mutual exclusion the monitor gave). A single-record
+`fetch` (`get-sentex`/`get-justification`/`get-provenance`) takes the *read* lock instead:
+two positional reads are safe against each other, so the lock only has to serialize a read
+against a concurrent append + slot rewrite, never one read against another. A bulk sweep —
+`export!`, `reindex`, the `recover` read side — that fans its per-record fetch across a
+worker pool then runs those fetches in parallel rather than funnelling each through one
+monitor (measured ~4× on a large export). `fetch` never takes the write lock, so a
+read cannot upgrade and deadlock against itself.
+
+The premise set is a `LiveRoster` too, and still resident. A premise is a sentex handle,
+so the set sits under the sentexes kind lock for reads and writes alike. A handle joins it
+after its record lands, in a second acquisition, so a write that fails leaves no handle in
+`premise-ids` whose `get-sentex` is nil.
 
 ### `Tallying` — the questions that do not need the roster
 
@@ -561,6 +574,13 @@ records that moved, a short section, a missing commit marker) discards it and ru
 same `reindex` above. That is what makes the backend safe to name: the index is
 recomputable from the records, so a discarded image costs time and never an answer.
 
+The slot fingerprint reads each slot's handle, offset and length, and no record content.
+`clear!` truncates the logs, so a record written after it lands at an offset a removed
+record held, and a record of the same byte length reproduces that record's slot exactly.
+So `clear!` mints a random **epoch** into the store's `counters.nippy` blob, and the
+fingerprint carries it (`record-store/clear-records!`). A store no `clear!` has emptied
+carries none, and its fingerprint is the slots alone.
+
 The swap is an atomic rename of the new file over the live one, which Windows will not do
 while the target is mapped — so **Windows is the refused platform and everything else is
 admitted**. The evidence is one operating system's file-locking model, so "not Windows" is
@@ -597,33 +617,65 @@ over different directories one shared index whenever they took the default. If t
 are emptied out from under it, the leftover index is dropped on the next open rather than
 left describing records that no longer exist.
 
-#### The belief certificate (`vaelii.belief.snapshot`, off by default)
+#### The belief image
 
-The image is one half of a `:disk-columnar` cold open; `recover` is the other, and its own
-expensive pass is the closing settle's definitional-clash scan (`settle/constraint-nogoods`).
-On a **clean** corpus that scan defeats nothing — every standing clash an equal-strength
-dilemma that disbelieves neither side (`settle/decide-nogood`) — so it is verification, and the
-belief it reaches is the belief the rest of the settle reaches without it. The belief
-certificate (`vaelii.impl.disk.belief-snapshot`) is to that scan what the image is to
-`reindex`: a full recover writes belief's **sparse complement** to `<dir>/belief/` — a
-`record-store/slot-fingerprint` stamp, whether the corpus was clean, and the disbelieved
-sentexes content-keyed as EDN, human-readable — and the next cold open that still matches the
-stamp binds `settle/*skip-constraint-nogoods*` for the closing settle and rederives identical
-belief without the scan.
+The index image is one half of a `:disk-snapshot` cold open; `recover` is the other. A
+`:disk-snapshot` KB on the dense network writes its whole belief state to `<dir>/belief/`,
+and the next open installs it in place of the recover (`vaelii.impl.belief-image`):
 
-Same cache-of-derived-state discipline as the image, and it reuses the same stamp: checked on
-**every** open, never behind a flag, and any doubt — a changed record, an unclean stamp, an
-absent or torn file — discards it and runs the full recover, always correct because belief is
-derived. Unlike the image it needs no platform guard: the writes are EDN through an atomic
-rename, not a mapping a swap has to break. A corpus carrying a strength-differentiated
-clash-**loser** — whose defeat cascades through what it supported, and which no post-hoc replay
-reconstructs — is stamped **unclean** and never taken on the fast path, the one case where
-skipping the scan would believe the wrong thing.
+- `network.bin` — the dense network: every node, justification column, label,
+  defeat-class, defeat, block and supersession (`dense-jtms/write-image`), keys in sorted
+  order so two images of one network are equal bytes;
+- `state.nippy` — the taxonomy's relations and caches, and the KB atoms recovery fills or
+  the closing settle leaves (`belief-image/state-atoms`);
+- `manifest.edn` — the stamp, written last, so a directory with no manifest holds no image.
 
-What the certificate never does is *supply* belief: it records that a clean close found no
-clash, so the worst a stale one can do is be discarded, never believed. Why a certificate
-of a clean bill rather than a stored image of the labels:
-[defenses.md](defenses.md#the-belief-certificate-records-a-clean-bill-not-the-labels).
+**The stamp** holds the two layout numbers, the records' `record-store/belief-fingerprint`,
+the **source identity** of the engine code that derived the belief
+([glossary.md](glossary.md)), and the two policies that move belief (`checks/arbitrating?`
+and `VAELII_ASSERTIVE_ARG_TYPES`). The records fingerprint reads the justifications kind's
+slots beside the sentexes kind's, where the index image's `slot-fingerprint` reads the
+sentexes alone: a justification stored over sentexes that did not change moves belief and
+not the index. A premise mark re-stores its sentex, so the sentex slots cover it. Both
+fingerprints carry the clear epoch described above, so an image of records a `clear!`
+removed is declined.
+
+**An open installs the image** only when every part of the stamp equals the KB's own, the
+KB's provers and solver are the defaults — a registered prover or evaluatable runs code the
+source identity does not cover — and both sections read in full into a scratch network
+before anything moves into the KB's own. Any mismatch, a registered prover, or a torn
+section leaves the KB to the full recover, which then writes a fresh image. A declined image
+costs the recover and never an answer, because the recover it falls back to is the path an
+open without an image runs.
+
+**An image is written** after a full recover, and when the directory closes if the records
+moved since the image on disk was written. The records fingerprint is read before and after
+the sections are written, and an image whose records moved during the write is abandoned. A
+KB opened over an empty store registers the close-time write at open, since it builds its
+belief assert by assert and never recovers. A KB whose network holds fewer nodes than it has
+stored sentexes — a loader filled it and skipped the recover, or it holds `assert-inert`
+sentexes — writes none, and recovers at its next open.
+
+Measured on a large `:disk-snapshot` store by `lein bench-recoverphase beliefimage <dir>`:
+the open that installed the image took under a tenth of the time of the open that ran a
+full recover and wrote it, and writing the image took under 3% of that recover. The two
+opens agreed on `in?` for every handle and held the same clash pairs.
+
+**A dump carries one too.** `export!` writes the same three files under `<dump>/belief/`
+by default (`:belief? false` omits them), and `import!` with `{:belief? true}` installs
+them in place of the recover it would otherwise run. The records half of a dump image's
+stamp is content rather than slots, because a dump lands in a different store: the export
+folds `fingerprint/record-hash` over the sentex frames and `fingerprint/justification-hash`
+over the justification frames it writes, and the import folds the same two over the
+records it lands. The import tries the image only when it kept every handle the dump
+gave, since the network names its nodes by handle; the summary's `:belief-image` reports
+`{:belief :installed}` or `{:belief :recovered :reason r}`.
+
+An installed image is the state of the KB that wrote it: its labels, which equal a recover's
+because belief is order independent, and its derivation depths and settle readings, which a
+recover rebuilds from the records instead of reading. Why an image is installed whole or
+discarded whole, and never reconciled against the records:
+[defenses.md](defenses.md#a-belief-image-is-installed-whole-or-not-at-all).
 
 ### The index is written once — `KvBackend`
 
@@ -870,7 +922,8 @@ frames plus fixed-width 24-byte `.idx` slots keyed by integer id.
 - **The frame codec** (`disk.codec`) — a frame holds its record's fields
   **positionally** — [why positional, not
   tagged](defenses.md#frames-are-positional-not-tagged).  A sentex frame is
-  `[tag sentence context id truth strength …]`, a justification frame a bare vector (one
+  `[tag sentence context id strength …]` (tags 0–3, which also carry a polarity field
+  after the id, still decode), a justification frame a bare vector (one
   shape needs no tag), and provenance — an open application map — passes through as it
   comes.  Each decoder dispatches on the thawed frame's shape, so **frames written before
   the codec still read** and no store needs rewriting.  Decoding interns the symbols it
@@ -1044,12 +1097,13 @@ which takes the kind lock beside the live-set drop it belongs with.
 **The switches are checked.**  Every `vaelii.*` property the backend reads — the tick
 (`vaelii.disk.sync-ms`), `vaelii.disk.fsync`, `vaelii.disk.auto-compact`,
 `vaelii.disk.compact-dead-ratio`, `vaelii.disk.compact-min-interval-ms`,
-`vaelii.disk.compress`, `vaelii.disk.cache`, `vaelii.disk.tokens`, `vaelii.disk.lock`,
-`vaelii.belief.snapshot` — has a domain in `vaelii.impl.config`, and a value outside it is
-refused with `:unknown-option` naming the property, the value and the legal spellings.
-`vaelii.index.snapshot` has an empty domain and is refused at every spelling, naming
-`{:backend :disk-snapshot}` instead: the mapped index image is a *representation*, and a
-representation belongs in the opts map where the KB's own configuration records it.
+`vaelii.disk.compress`, `vaelii.disk.cache`, `vaelii.disk.tokens`, `vaelii.disk.lock` —
+has a domain in `vaelii.impl.config`, and a value outside it is refused with
+`:unknown-option` naming the property, the value and the legal spellings.
+`vaelii.index.snapshot` and `vaelii.belief.snapshot` have an empty domain and are refused at
+every spelling, naming `{:backend :disk-snapshot}` instead: the mapped index image and the
+belief image are what that backend reads on open, and a representation belongs in the opts
+map where the KB's own configuration records it.
 `open-kb` reads the lot before it opens anything (`config/check!`), which is the earliest
 entry point: two of them are read per fsync tick, where a throw is a log line nobody can
 attribute.  The boolean switches share one vocabulary — `true` / `1` / `on` / `yes` and
@@ -1118,12 +1172,8 @@ emits the right record.
 
 The **core** (`LiteralSentex` and `RuleSentex` alike):
 
-- `:sentence` — the readable, normalized form (`(not (flies Tweety))`,
-  `(implies (and A B) C)`), kept for display and matching.
 - `:context` — the context symbol it holds in.
 - `:id` — the integer handle, `nil` until the record store assigns one.
-- `:polarity` — `:positive` / `:negative`. A `(not S)` becomes `S` at `:negative`, and **double
-  negation is eliminated** (`(not (not S))` ⇒ `:positive` over `S`, via `peel-not`).
 - `:strength` — the assumption strength (`:monotonic` / `:default`) when the sentex is
   asserted as a premise; `nil` for a purely-derived sentex. The record store writes it
   on `mark-premise` and reads it back with `premise-strength`, so premise strength
@@ -1135,11 +1185,21 @@ query pattern: one signed predicate application, ground or holding variables. Th
 the sentence's shape rather than its role, and the alternative that looks obvious
 (`FactSentex`) is wrong for a reason recorded in
 [defenses.md](defenses.md#the-two-records-are-named-for-the-sentences-shape-not-for-its-role). It adds
-nothing to the core. Reading any rule-only key off a `LiteralSentex` returns `nil`, so
+one field to the core:
+
+- `:sentence` — the readable, normalized form (`(flies Tweety)`, `(not (flies Tweety))`),
+  kept for display and matching. A negative literal's sentence is `(not S)` with **double
+  negation eliminated** (`(not (not S))` ⇒ `S`, via `peel-not`), so the head is the whole
+  sign: `sentex/negative?` reads it, and no field repeats it.
+
+Reading any rule-only key off a `LiteralSentex` returns `nil`, so
 `(some? (:antecedent sx))` is the literal-vs-rule discriminant everywhere — no consumer
 needs to know which record it holds.
 
-**`RuleSentex`** is an implication, and adds the decomposition:
+**`RuleSentex`** is an implication, and holds **no `:sentence`**. The decomposition below
+is its one representation — the form the chainers, the indexers and the checks read — and
+`sentex/sentence-of` builds the `(implies (and A B) C)` form from `:antecedent` and
+`:consequent` for the trie key and for display. It adds:
 
 - `:antecedent` — the antecedent patterns as a vector (a leading `and` unwrapped).
 - `:consequent` — the consequent pattern.

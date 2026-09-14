@@ -139,10 +139,13 @@
 ;; the separation itself, a metatype declaring its members pairwise separate, a term
 ;; joining such a metatype, a `genl` edge closing a separation over content already
 ;; stored, and a `genlCx` edge putting two contexts' memberships in one reader's sight.
-;; A trigger added to one side and not the other is what this row cannot survive.
+;; A trigger added to one side and not the other is what this row cannot survive.  The
+;; report half places the two memberships in sibling contexts that only a context below
+;; both sees together: a pair a member's own context sees is decided under either policy,
+;; so only a pair no member sees whole is left to the exposure pass to name.
 
 (deftest every-disjointness-trigger-refuses-and-exposes-the-same-clash
-  (tu/with-terms [dog_t cat_t pup_t meta_t alpha_t beta_t Rex CxLeft CxRight]
+  (tu/with-terms [dog_t cat_t pup_t meta_t alpha_t beta_t Rex CxLeft CxRight CxBelow]
     (let [ground (fn [& ts] (map #(list 'genl % 'thing) ts))
           rows
           [{:trigger 'disjoint
@@ -169,19 +172,27 @@
                              (ground dog_t cat_t)
                              [(list 'disjoint dog_t cat_t)])
             :closing (list 'genlCx CxLeft CxRight)
-            :facts   [[(list cat_t Rex) CxRight] [(list dog_t Rex) CxLeft]]}]]
-      (doseq [{:keys [trigger ground closing facts]} rows]
+            :facts   [[(list cat_t Rex) CxRight] [(list dog_t Rex) CxLeft]]
+            ;; the report half's second edge into the context below both is the one that
+            ;; completes the joint sight
+            :report-below   [(list 'genlCx CxBelow CxRight)]
+            :report-closing (list 'genlCx CxBelow CxLeft)}]]
+      (doseq [{:keys [trigger ground closing facts report-below report-closing]} rows]
         (testing (str trigger " arriving last")
           (let [[[held held-ctx] [arriving arriving-ctx]] facts
                 d (entry-point (fn [kb]
                                  (doseq [s (concat ground [closing])] (v/assert kb s 'CxUniverse))
                                  (v/assert kb held held-ctx))
                                arriving arriving-ctx)
+                sight [(list 'genlCx CxLeft 'CxUniverse) (list 'genlCx CxRight 'CxUniverse)]
+                below (or report-below
+                          [(list 'genlCx CxBelow CxLeft) (list 'genlCx CxBelow CxRight)])
                 r (first (reported (fn [kb]
-                                     (doseq [s ground] (v/assert kb s 'CxUniverse))
-                                     (v/assert kb held held-ctx)
-                                     (v/assert kb arriving arriving-ctx)
-                                     (v/assert kb closing 'CxUniverse))
+                                     (doseq [s (concat ground sight below)]
+                                       (v/assert kb s 'CxUniverse))
+                                     (v/assert kb held CxLeft)
+                                     (v/assert kb arriving CxRight)
+                                     (v/assert kb (or report-closing closing) 'CxUniverse))
                                    :disjoint))]
             (is (= :disjoint (:type d)) "the entry point refuses the second membership")
             (is (some? r)               "and the other order exposes the pair")
@@ -281,8 +292,9 @@
 
 (deftest a-cross-context-clash-is-exposed-in-the-entry-points-vocabulary
   ;; The **other** retroactive reader for these two kinds, and the one that runs under
-  ;; `:refuse`: two facts each admissible where written, put in one reader's sight by a
-  ;; `genlCx` edge.  It re-derives through `checks/arbitrable-violations` — the entry point's own
+  ;; `:refuse`: two facts each admissible where written, put in one reader's sight by two
+  ;; `genlCx` edges from a context below both — neither fact's own context sees the other,
+  ;; so nothing decides the pair and the exposure pass names it.  It re-derives through `checks/arbitrable-violations` — the entry point's own
   ;; check — and then writes a message of its own, which is where a wording can drift even
   ;; where the finding cannot.
   (doseq [{:keys [kind mark held arriving strength via]}
@@ -294,7 +306,7 @@
               :strength :monotonic
               :held (list parentOf A B) :arriving (list parentOf B A)}])]
     (testing (name kind)
-      (tu/with-terms [CxLeft CxRight]
+      (tu/with-terms [CxLeft CxRight CxBelow]
         (let [d (entry-point (fn [kb]
                                (v/assert kb mark 'CxUniverse)
                                (v/assert kb held 'CxUniverse {:strength strength}))
@@ -306,7 +318,8 @@
                     (v/assert kb s 'CxUniverse))
                   (v/assert kb held CxLeft {:strength strength})
                   (v/assert kb arriving CxRight {:strength strength})
-                  (v/assert kb (list 'genlCx CxLeft CxRight) 'CxUniverse)
+                  (v/assert kb (list 'genlCx CxBelow CxLeft) 'CxUniverse)
+                  (v/assert kb (list 'genlCx CxBelow CxRight) 'CxUniverse)
                   (:detail (first (filter #(= kind (:violation %)) (v/violations kb)))))]
           (is (= kind (:type d)) "the entry point refuses the second fact")
           (is (some? r)          "and the split-context order exposes the pair")

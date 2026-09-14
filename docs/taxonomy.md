@@ -35,9 +35,9 @@ both ways:
 - `specs tax t context` — subtypes of `t`, incl. `t` (down-closure).
 - `genl? tax sub super context`.
 
-Each has a `-global` twin — `genls-global tax t`, `specs-global`, `genl?-global`, and
-`context-up-global` over on the `genlCx` side — which walks **every** active edge rather
-than the edges a context sees. The two are spelled apart rather than distinguished by
+Each has a `-global` twin — `genls-global tax t`, `specs-global`, `genl?-global`, and, over
+on the `genlCx` side, `context-up-global` and `genlCx?-global` (the twin of `sees?`) — which
+walks **every** active edge rather than the edges a context sees. The two are spelled apart rather than distinguished by
 arity because on a KB where no edge is context-restricted they return the *same object*:
 a caller that meant to scope and did not is right until the KB it is wrong on. Who reads
 globally, and why: [below](#the-global-readers-and-who-may-use-one).
@@ -301,10 +301,11 @@ and `genls` / `specs` walk it on demand.
   it forces them — O(1) for a hierarchy loaded parent-before-child, since a fresh node
   has no descendants, and O(descendants) when it is not (which is what a batch defers;
   see below). The O(1) is conditioned on an empty `:scc`: the lift moves whole
-  components, and finding a component's members reads the `:scc` map, so it holds
-  always for `genl` (cycles are refused there) and for `genlCx` only while no
-  context cycle stands — with cyclic contexts in the map, an insert pays a walk of
-  the cyclic population. The lift moves whole **components**, since the potential ranks the
+  components, and finding a component's members reads the `:scc` map, so it holds for a
+  live build of either relation — `genl` and `genlCx` cycles are both refused at
+  assert — and is conditioned on the `:scc` staying empty: a recovered or foreign
+  store's cycle populates it, and an insert then pays a walk of the cyclic population.
+  The lift moves whole **components**, since the potential ranks the
   condensation: a member raised alone would sit above its own mates, each of which then
   forces the next one round the cycle. No closure is touched. A redundant re-assert of
   an already-active edge is a no-op.
@@ -321,14 +322,15 @@ and `genls` / `specs` walk it on demand.
   reachability with a `:depth`-pruned early-exit walk (`depth[src] ≤ depth[tgt]` rejects
   a pair in O(1)), which is what keeps the per-assert `wff` cycle check flat on a deep
   load.
-- A **cycle** is refused for `genl` and admitted for `genlCx`, and the potential is
-  what makes both work. `wff` (assert path) and `special/wff-violation` (derivation path)
-  refuse a `genl` edge that would close one, because a type cycle claims two types are
-  coextensive — a claim about *terms*, which is the equality partition's job, and which
-  would make a `disjoint` pair disjoint from itself. A **context** cycle claims only that
-  the two contexts see each other, which is a thing `genlMt` says (OpenCyc states 49
-  of them, BaseKB's own component among them), so it is admitted and the taxonomy holds
-  it.
+- A **cycle** is refused for both `genl` and `genlCx` at assert, and the potential is
+  what still makes a recovered one work. `wff` (assert path) and `special/wff-violation`
+  (derivation path) refuse a `genl` or `genlCx` edge that would close one: a type cycle
+  claims two types are coextensive — a claim about *terms*, which is the equality
+  partition's job, and which would make a `disjoint` pair disjoint from itself — and a
+  context cycle, though it claims only that the two contexts see each other, is refused
+  too, so the context hierarchy is a partial order like the type hierarchy. A recovered
+  or foreign store replays its stored edges past those checks (`recovery/recover`), so
+  the taxonomy still holds a cycle such a store presents.
 - Holding it means the potential ranks the **condensation** rather than the graph:
   `edge x→y ⇒ depth[x] > depth[y]`, except inside a strongly connected component, where
   the members are level and `:scc` maps each to the component's representative
@@ -398,10 +400,10 @@ a path the scoped `genls` — walking the very same visible edges — returns. W
 filtered walk may **not** borrow is `reachable?`'s other half, answering true off a
 shared component: mutual reachability there is a fact about the *global* edge set, and
 the whole question a scoped read asks is which of those edges the reader can see. So a
-component is a reason to keep walking and never an answer. (A `genl` cycle is refused at
-assert time and reachable anyway: defeat an edge, assert its reverse — the check reads
-the *active* adjacency, which no longer holds the defeated one — then revive the first.
-`genlCx` admits cycles outright.)
+component is a reason to keep walking and never an answer. (A `genl` or `genlCx` cycle is
+refused at assert time and reachable anyway: defeat an edge, assert its reverse — the
+check reads the *active* adjacency, which no longer holds the defeated one — then revive
+the first. A recovered or foreign store replays a stored cycle past the check as well.)
 
 The **`genlCx` closure itself is the stated exception and stays global**:
 visibility scoped by visibility would be circular, every `genlCx` edge is forced
@@ -412,8 +414,8 @@ only a descendant can see whole, are docs/contexts.md's story.
 ### The global readers, and who may use one
 
 Every one of those reads goes through a reader whose **name** says it is global —
-`genls-global`, `specs-global`, `genl?-global`, `context-up-global` — rather than through
-a shorter arity of the scoped one. The reason is that the two agree far more often than
+`genls-global`, `specs-global`, `genl?-global`, `context-up-global`, `genlCx?-global` —
+rather than through a shorter arity of the scoped one. The reason is that the two agree far more often than
 they differ: `visible-ctxs` hands back the global closure itself, the identical object,
 for any reader that sees every context an edge was asserted from, which is most readers of
 most KBs. A caller that dropped the context by accident would therefore pass every test
@@ -427,7 +429,7 @@ docstring. What is on it:
 | Caller class | Why it must not be scoped |
 |---|---|
 | `vaelii.core`'s own 2-arity `genls` / `specs` / `genl?` | the public API offers both readings, and this arity **is** the global one |
-| assert-time refusals (`wff`, `checks`) | a refusal is a claim about the KB: a cycle refused when asked from one context and allowed from another is a coin toss, not a rule |
+| assert-time refusals (`wff/genl-problems`, `wff/genlCx-problems`, `checks`) | a refusal is a claim about the KB: a cycle refused when asked from one context and allowed from another is a coin toss, not a rule. The disjoint **overlap** refusal is the deliberate exception — `wff/disjoint-problems` reads the scoped `genl?`, so it agrees with the scoped `(genl a b)` query and an `except` that hides the bridging edge admits the pair (#92) |
 | the forward join and the trigger keys (`rules/trigger-keys`, `chain`, `inherit/moved-predicates`, `vantage`) | a firing is placed in a context the join decides, so the candidate fan cannot be scoped by one — the narrowing happens at placement |
 | the exception re-check triggers (`special`) | a trigger over-approximates in the direction the answer is: a declaration this edge cannot see still qualifies a rule in some context that can, and a missed trigger is a wrong belief where a spare one is a query |
 | settle's candidate discovery | an over-approximated candidate merely checks and yields nothing; the arbitration that follows is scoped |
@@ -949,9 +951,9 @@ promise the region is everything — `core/recover` binds it around two settles 
 second one's region is only what re-recording the refusals moved.
 
 The **arbitrating** path reads the same rule. `settle/declaration-implicates` — which
-runs under the KB's constraint policy (`checks/arbitrating?`: `open-kb`'s
-`:constraints :arbitrate`, or the process default) and hands `settle` a nogood rather
-than a ledger entry — narrows through `declaration-reach` too, since the two answer one
+runs under either constraint policy, because a recover decides the same pairs from its
+region whatever the policy, and hands `settle` a nogood rather than a ledger entry —
+narrows through `declaration-reach` too, since the two answer one
 question about one KB: a pair that one reached and the other did not would be reported
 as merely *visible* by `violations` or as *decided* by `contradictions` depending on
 which route happened to run.
@@ -1425,7 +1427,12 @@ Before storing, `assert` checks the special predicates are structurally sound:
 - `genl` / `genlCx` — both arguments are types / contexts (not individuals), not
   equal, and don't create a cycle (the reverse relation must not already hold).
 - `disjoint` / `disjoint_metatype` — arguments are types; two genl-related types can't
-  be declared disjoint (one contains the other, so they overlap).
+  be declared disjoint (one contains the other, so they overlap). Genl-relatedness here
+  is read **scoped to the asserting context**, not globally: where an `except` hides the
+  bridging edge, the scoped `(genl a b)` query is empty and the disjoint assertion is
+  admitted, so the refusal agrees with the query in the context it is made (#92). This is
+  the assert-time reading only — `disjoint?`'s own genl-relatedness guards stay global, so
+  disjointness remains monotone on visibility ([above](#the-global-readers-and-who-may-use-one)).
 - `arg` / `genlArg` — a predicate, a positive-integer position, and a type. One
   check serves both (`wff/arg-constraint-problems`): they are structurally identical
   and differ only in what they demand of the argument, which is `checks`' business.

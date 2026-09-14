@@ -38,7 +38,10 @@ mkdir -p testbench/bench-caches
 # `with-profile` FIRST and `update-in` second, which is the order that works: the other
 # way round the profile's vector is merged on top afterwards and its -Xmx6g is the last
 # one the JVM sees.
-lein with-profile +bench,+with-foreign update-in :jvm-opts conj '"-Xmx40g"' -- \
+#
+# The corpus arm needs the `:cyc-corpus` reader on the classpath.  Link it first with
+# scripts/link-checkouts.sh; without it the run refuses by name (`:no-foreign-reader`).
+lein with-profile +bench update-in :jvm-opts conj '"-Xmx40g"' -- \
   run -m vaelii.bench.caches "$CORPUS" "$PROFILE" "$CHAIN" >> "$LOG" 2>&1
 STATUS=$?
 

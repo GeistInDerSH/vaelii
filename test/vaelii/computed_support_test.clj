@@ -227,5 +227,6 @@
                        C)
           ch (handle-of kb youngerThan (list youngerThan Ann Bob))]
       (is (some? ch))
-      (is (= [#{h1 h2 rh}]
-             (mapv (comp set :antecedents) (v/supporting-justifications kb ch)))))))
+      (is (= [[#{h1 h2} rh]]
+             (mapv (juxt (comp set :antecedents) :informant)
+                   (v/supporting-justifications kb ch)))))))

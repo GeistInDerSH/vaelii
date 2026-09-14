@@ -36,9 +36,9 @@
 # What DOES change is that a linked build discovers five formats where the
 # shipped build discovers none, so a foreign read that works on your machine may
 # be the link rather than the code. That is a repl and browser concern, not a
-# test one; `lein with-profile +with-foreign` remains the route for anyone
-# without the sibling checked out, which is how a real consumer gets it
-# (project.clj, docs/foreign.md).
+# test one. Without the sibling checked out, add the published reader as an ad-hoc
+# dependency instead, which `scripts/with-foreign.sh` wraps — the from-checkout form
+# of the coordinate a real consumer puts in its own project (docs/foreign.md).
 #
 # vaelii-foreign is the only sibling linked, because it is the only other
 # published one. This script ships, so every repo it names has to be a repo the

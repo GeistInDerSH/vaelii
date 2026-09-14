@@ -311,17 +311,21 @@
   with `:varmap` holding the names the author used, so those go back in
   (`sentex/originalize`) — re-canonicalizing the numbered form instead would rebuild the
   rule correctly and leave it displaying as `?var0` forever.  A fact carries neither: its
-  `not` is already in its sentence."
-  [{:keys [sentence antecedent varmap direction defeasible assumption constraint]}]
+  `not` is already in its sentence.
+
+  A rule frame carries `:sentence` beside `:antecedent` / `:consequent` (`io.export`
+  writes it); one carrying only the two fields is rebuilt from them (`rule-sentence`)."
+  [{:keys [sentence antecedent consequent varmap direction defeasible assumption constraint]}]
   (if (some? antecedent)
-    (-> (sx/originalize sentence varmap)
+    (-> (sx/originalize (or sentence (sx/rule-sentence antecedent consequent)) varmap)
         (rules/rewrap direction defeasible assumption constraint))
     sentence))
 
 (defn- frame-decoder
   "A `frame -> {:id :context :sentence :strength …}` decoder for this import.
 
-  A map carrying `:sentence` is ours and is decoded here; anything else is a foreign
+  A map carrying `:sentence`, or a rule's `:antecedent`, is ours and is decoded here;
+  anything else is a foreign
   dialect's and goes to its reader, resolved **once** (a `delay`, not a lookup per
   frame — this runs once per frame in the dump) and possibly not there at all, which is the honest error
   for a build that has finished with that format.
@@ -331,7 +335,7 @@
   []
   (let [foreign-decode (delay (:decode-frame (foreign/reader :engine-dump)))]
     (fn [frame]
-      (if (and (map? frame) (contains? frame :sentence))
+      (if (and (map? frame) (or (contains? frame :sentence) (contains? frame :antecedent)))
         (assoc frame :sentence (our-sentence frame))
         (if-let [decode @foreign-decode]
           (decode frame)
@@ -466,7 +470,7 @@
                           (do (vswap! refused tally-refusal ty) nil)
                           (throw e))))]
           (when rec
-            (let [k [(:sentence rec) (:context rec)]
+            (let [k [(sx/sentence-of rec) (:context rec)]
                   h (if-let [prior (get @seen k)]
                       (do (vswap! collapsed inc) prior)
                       (let [hh (if (and ours? did)
@@ -486,7 +490,7 @@
                         (vswap! seen assoc k hh)
                         (fprint hh rec)                  ; only what actually got stored
                         hh))]
-              (when (embeds-handle? (:sentence rec)) (vswap! embed conj h))
+              (when (embeds-handle? (sx/sentence-of rec)) (vswap! embed conj h))
               (when did
                 (vswap! sx-meta assoc did {:handle   h
                                            :rule?    (some? (:antecedent rec))
@@ -595,17 +599,16 @@
 ;; the id map and hands back the same three counts.
 
 (defn- assert-no-naf-justifications!
-  "Refuse a dump that fills the reserved `:out` slot on any `Justification` frame
+  "Refuse a dump whose `Justification` frame carries a non-empty `:out`
   (`:naf-justification`), reading the stream for nothing else.
 
-  The slot is a negation-as-failure antecedent set, reserved and empty: nothing in the
-  engine writes one (docs/naf.md says why NAF is re-evaluated instead), and three relabel
-  invariants read it as empty rather than reading it — `region-fixpoint`'s semi-naive
-  warrant is that `valid?` is monotone in `in`, which a justification invalidated by a
-  datum *entering* is not; `sweep*` tears a live justification down through a dead
-  out-datum; and the exception fixpoint never consults it at all.  A dump can carry the
-  slot, because the frame is the record's field map and the codec round-trips it — so
-  the import is where an imported one would enter, and the last place anything can tell.
+  A `Justification` has no out-list: NAF is re-evaluated rather than stored
+  (docs/naf.md), and the relabel reads a justification's antecedents and its rule and
+  nothing else — `region-fixpoint`'s semi-naive warrant is that `valid?` is monotone in
+  `in`, which a justification invalidated by a datum *entering* is not.  A dump frame is
+  a field map, so it can carry an `:out` key, and a non-empty one names
+  negation-as-failure antecedents this build has nowhere to put: imported without them,
+  the justification would support its conclusion where the exporting KB's did not.
   Refused rather than dropped: a dropped justification takes belief with it just as
   silently.
 
@@ -631,24 +634,23 @@
     (doseq [frame frames]
       (when (seq (:out frame))
         (throw (ex-info (str "the dump names a justification with a non-empty :out "
-                             (pr-str (vec (:out frame))) " — the negation-as-failure antecedent"
-                             " slot is reserved and empty, nothing in the engine writes"
-                             " one, and the relabel reads it as empty rather than"
-                             " reading it: the semi-naive fixpoint would skip the"
-                             " justification an arriving datum invalidates, and the"
-                             " sweep would tear down a valid one.  Re-export from a KB"
-                             " whose justifications carry no :out, or drop the slot from"
-                             " the frame")
+                             (pr-str (vec (:out frame))) " — a justification here has no"
+                             " negation-as-failure antecedent list, so imported without"
+                             " it the justification would support its conclusion where"
+                             " the exporting KB's did not.  Re-export from a KB whose"
+                             " justifications carry no :out, or drop the key from the"
+                             " frame")
                         {:type :naf-justification :out (vec (:out frame))
                          :consequence (:consequence frame) :justification (:id frame)}))))
     (finally (frames/close-frames! frames))))
 
 (defn- import-justifications!
   "Stream the `Justification` frames against the old→new id map.  Every handle a
-  justification names is remapped — its consequence, its antecedents (the rule among
-  them), and its informant when that is a rule handle rather than a label — and one it
-  cannot resolve drops the justification rather than rebuilding it against whatever
-  record now sits at that number.
+  justification names is remapped — its consequence, its antecedents, and its informant
+  when that is a rule handle rather than a label — and one it cannot resolve drops the
+  justification rather than rebuilding it against whatever record now sits at that
+  number.  A frame listing its rule among the antecedents as well stores the rule once,
+  as the informant (`jtms/->just`).
 
   A frame with a non-empty `:out` is refused, and by
   `assert-no-naf-justifications!` before this phase runs rather than here: the
@@ -685,8 +687,11 @@
   and from `:dropped` and is the only one a torn-file check can read: a truncated chunk
   is indistinguishable from a clean EOF, so what `meta.edn` states is the sole witness
   (`check-frame-count!`), and a frame this load dropped for an unresolvable reference is
-  not a torn file."
-  [kb frames old->new orphaned preserve? tick!]
+  not a torn file.
+
+  `jprint` is folded with each justification stored (`fingerprint/justification-hash`),
+  the half of a dump belief image's records stamp the sentex pass does not take."
+  [kb frames old->new orphaned preserve? tick! jprint]
   (let [records (:records kb)
         remap   (fn [id] (if (integer? id) (get old->new id) id))
         ;; the ids that failed to resolve, which the drop below reads to see whose fault
@@ -720,6 +725,7 @@
                   just (jtms/->just jid inf antes conseq (or bindings {})
                                     (strength-class strength))]
               (p/write-record! sink just)
+              (jprint jid just)
               (when-let [did (:id frame)] (vswap! ids assoc did jid))
               (vswap! stored inc))))))
     {:stored @stored :dropped @dropped :dropped-orphaned @orphans :ids @ids
@@ -1124,6 +1130,25 @@
                      :value (:belief? opts)
                      :values (vec (sort-by pr-str (keys belief-modes)))}))))
 
+(defn- dump-belief!
+  "The belief half of a `{:belief? true}` import: install the dump's belief image in place
+  of `recover` when the import kept every handle (`kept?`) and the dump carries one, and
+  recover otherwise.  The image's records stamp is checked against `sentex-fp` and
+  `jprint`, the fingerprints this import took of the sentexes and the justifications it
+  landed.  Returns `recovery/recover-with-image`'s map, or `{:belief :recovered :reason
+  r}` with `r` `:absent` (no image in the dump) or `:handles-remapped`."
+  [kb dir kept? sentex-fp jprint]
+  (let [bdir (io/file dir "belief")]
+    (cond
+      (not kept?)
+      (do (recovery/recover kb) {:belief :recovered :reason :handles-remapped})
+
+      (not (.exists (io/file bdir "manifest.edn")))
+      (do (recovery/recover kb) {:belief :recovered :reason :absent})
+
+      :else
+      (recovery/recover-with-image kb bdir {:sentexes sentex-fp :justifications (jprint)}))))
+
 (defn import-dump
   "Import a vaelii export dump from `dir` into the (empty) `kb` — one
   `vaelii.impl.io.export` wrote, or one in a foreign dialect this build still carries a
@@ -1132,7 +1157,11 @@
   With `{:belief? true}` (the default) it lands in the state the engine's own restart path
   produces: the record store populated from the re-canonicalized records + the
   justifications + premise marks, the index rebuilt (`reindex`), belief recovered
-  (`recover`).
+  (`recover`).  A dump carrying a belief image (`export!`'s `:belief?`) is installed in
+  place of the recover when the import kept every handle and the records it landed, the
+  source identity and the belief policies all equal the image's stamp; the summary's
+  `:belief-image` says which happened (`{:belief :installed}` or `{:belief :recovered
+  :reason r}`).
 
   With `{:belief? false}` it stores + indexes every sentex but skips what rests on what,
   the premise marks, and `recover` — the whole corpus is browsable / findable / countable
@@ -1173,7 +1202,7 @@
   since an import is not a transaction.
 
   **Every refusal of the dump itself lands before the first write**, for that reason —
-  the version gate, the empty destination, the variant, and the reserved `:out` slot on a
+  the version gate, the empty destination, the variant, and a non-empty `:out` on a
   justification frame (`assert-no-naf-justifications!`), which is read out of the file
   rather than met in the middle of the justification phase.  So a refused dump leaves the
   store exactly as it found it and the retry needs no `clear!`.  What that does not cover
@@ -1263,6 +1292,7 @@
               summary)
             (let [ours?    (ours? meta)
                   tick     (fn [phase total] (ticker on-progress phase total report-every))
+                  jprint   (fp/accumulator fp/justification-hash)
                   ;; the last gate that can be decided from the dump alone, and so the
                   ;; last one that can be decided before the first write: a `:out` frame
                   ;; refused from inside the justification loop refused a KB that was
@@ -1305,7 +1335,8 @@
                           (import-justifications!
                            kb (read-fn (io/file dir frames/justification-file) compression) old->new
                            orphaned kept?
-                           (tick :justifications (:justification-count meta)))
+                           (tick :justifications (:justification-count meta))
+                           jprint)
                           ;; the same witness the sentex stream gets, and the stream that
                           ;; most needs it: a torn justification file is indistinguishable from a clean EOF,
                           ;; and what it loses is belief — a KB that recovers to fewer
@@ -1344,14 +1375,16 @@
               ;; reads one a restart finds — which is what makes the settling schedulable
               ;; rather than a condition of the load.
               (let [idx (install-index! kb dir compression read-fn (read-index-meta dir)
-                                        fingerprint kept? on-progress)]
-                (when (true? belief?) (recovery/recover kb))
+                                        fingerprint kept? on-progress)
+                    img (when (true? belief?)
+                          (dump-belief! kb dir (and ours? kept?) fingerprint jprint))]
                 (let [summary (merge
                                {:variant            variant
                                 :dialect            (if ours? :vaelii :engine)
                                 :handle-policy      (if kept? :preserved :remapped)
                                 :collapsed          collapsed
                                 :belief?            belief?
+                                :belief-image       img
                                 :sentexes           (cap/count-sentexes (:records kb))
                                 :frames             frames
                                 :justifications     (cap/count-justifications (:records kb))

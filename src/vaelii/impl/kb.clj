@@ -139,11 +139,13 @@
 ;; each key absent until something asks.  Reads over that state answer nothing and can be
 ;; re-asked; a write lands content the store keeps, so the write entry points ask
 ;; `write-hazards` below.  An atom because `recover` and `reindex` clear what they build.
+;; `oplog` is the operation log (`vaelii.impl.oplog`) this KB records its public writes
+;; into, or nil.  A field, because every public write reads it to decide whether to record.
 (defrecord KB [records index tms taxonomy provers solver conflicts program violations
                contradictions recheck refused settle-stats chain-stats opposed excepted
                negations clashes supersessions reports qcn qcn-joined matches closures
                naming constraints rule-antecedents rule-contexts feed dir snapshot-dir
-               unrecovered])
+               index-space unrecovered oplog])
 
 ;; ---- storage selection: two independent axes ------------------------------
 ;;
@@ -434,6 +436,48 @@
                        :axis :index :kind (:index axes) :instead :pg-disk-log
                        :records (:records axes) :index (:index axes)})))
     axes))
+
+(defn durable-dirs
+  "The canonical directories `open-kb` over `opts` would take an exclusive lock on — the
+  records/index directory (`:disk` records or a `:disk-log` index), and, for a durable
+  fork, the fork's own writable directory.  `core/open-kb` snapshots which of these are
+  already open before it constructs the KB, and releases only the ones this call newly
+  opened when a throw *after* the stores resolve would otherwise leave a lock held for the
+  JVM's life (`open-kb`'s own comment on the `:pg` overlay says why one such throw was
+  moved earlier).  Empty for an all-in-RAM KB.
+
+  A pure computation over `opts`: it opens nothing and takes no lock, and a `backend-axes`
+  that throws on malformed opts answers empty rather than propagating — the construction
+  that follows throws the real refusal, and a KB that never resolved a store has no lock to
+  release."
+  [opts]
+  (try
+    (let [{rkind :records ikind :index} (backend-axes opts)
+          ov      (:overlay opts)
+          {ovr :records} (when ov (backend-axes ov))]
+      (into []
+            (distinct)
+            (concat
+             (when (or (= :disk rkind) (= :disk-log ikind))
+               [(disk/canonical-dir (disk/disk-dir opts))])
+             (when (= :disk ovr)
+               [(disk/canonical-dir (disk/disk-dir ov))]))))
+    (catch Throwable _ [])))
+
+(defn release-index-space!
+  "Forget the RAM derived index a disk-backed KB held under `space` — the dir-keyed
+  derived-index state in the three RAM index backends.  `core/close!` calls this with the
+  `:index-space` the KB recorded when it opened, so a process opening durable KBs in a loop
+  does not keep one derived index per directory it has finished with.  The space belongs to
+  at most one of the three backends and the others no-op, so the caller needs no record of
+  which held it.  A no-op for nil — an all-in-RAM KB keeps its space (its store, not a
+  derived cache) and a durable-index KB's index is released with its directory."
+  [space]
+  (boolean
+   (when space
+     (or (mem/drop-index-space! space)
+         (dense/drop-index-space! space)
+         (columnar/drop-state-space! space)))))
 
 (defn- sqlite-record-store-ctor
   "The `com.vaelii/sqlite` adapter's record-store constructor, resolved **lazily** — the
@@ -1348,6 +1392,14 @@
 
                  (and (= :overlay rkind) (= :disk ovr))
                  (disk/canonical-dir (disk/disk-dir ov-opts)))
+        ;; The registry key a **derived** (RAM) index over **durable** records is held
+        ;; under, so `close!` can forget it (`release-index-space!`) rather than keep one
+        ;; derived index per directory the process has finished with.  Nil for a durable
+        ;; index — released with its directory — and for all-in-RAM records, whose space is
+        ;; the store itself and not a derived cache to drop.
+        index-space (when (and (not (:durable? (index-axes ikind)))
+                               (contains? #{:disk :sqlite :pg} rkind))
+                      (derived-index-space rkind opts))
         ;; by name rather than positionally: seventeen `(atom {})`s in a row is a
         ;; miscount waiting to happen, and a miscount here hands one subsystem another's
         ;; state with nothing to notice it — every field is an atom, so the shapes do not
@@ -1372,6 +1424,9 @@
                      ;; cadence is a nil check on this field, so every other durable
                      ;; backend pays a field read per assert and nothing else.
                      :snapshot-dir (when snapshot? kb-dir)
+                     ;; the RAM derived-index registry key `close!` forgets (nil unless the
+                     ;; index is derived and the records durable) — `release-index-space!`
+                     :index-space index-space
                      :tms     (create-tms tms)
                      :taxonomy (tax/create-taxonomy)
                      :provers  (atom provers/default-provers)
@@ -2106,7 +2161,7 @@
           ;; an α-rename, a fold), the cache was consulted under a different key than the
           ;; store holds, so its miss proves nothing and the trie must answer.  That one
           ;; equality subsumes every special-predicate storage rule at once.
-          (if (and (= sentence (:sentence built))
+          (if (and (= sentence (sx/sentence-of built))
                    (functor-cache-authoritative? kb stamp built))
             nil
             (let [direct (stored-at kb built (p/leaf-at (:index kb) (sx/path built)))]
@@ -2117,7 +2172,7 @@
                 ;; canonical key (`integrate/sentex-removed!`), so an entry keyed on a
                 ;; spelling canonicalization rewrites — a sorted symmetric literal, a folded
                 ;; comparison — would outlive its sentex as a stale handle
-                (if (= sentence (:sentence built))
+                (if (= sentence (sx/sentence-of built))
                   (observe/cache-handle! stamp sentence context direct)
                   direct))))))))
 
@@ -2449,7 +2504,7 @@
                         (update 0 (fn [m]
                                     (reduce (fn [m k] (update m k (fnil inc 0)))
                                             m
-                                            (rules/antecedent-predicates (:sentence sx)))))
+                                            (rules/antecedent-keys (:antecedent sx)))))
                         (update 1 update (:context sx) (fnil inc 0)))
                     acc))
                 [{} {}]
@@ -2491,15 +2546,15 @@
      ;; trie walk to rediscover it — keyed on the *canonical* sentence, which is what the
      ;; store holds; a caller looking it up by some other spelling misses and fills its
      ;; own key off the index, since a miss costs exactly the trie walk and no more
-     (observe/cache-handle! (canon-stamp kb) (:sentence s) (:context s) h)
+     (observe/cache-handle! (canon-stamp kb) (sx/sentence-of s) (:context s) h)
      ;; maintain the P/¬P coincidence set for settle (this store may have completed an
      ;; opposing pair); the remove mirror is `integrate/sentex-removed!`
-     (note-opposed! kb (:sentence s))
+     (note-opposed! kb (sx/sentence-of s))
      ;; ...and the visibility roster, at the same point and with the same mirror
      (note-excepted! kb s true)
      ;; ...and the argument-preservation roster, third of the same kind: settle's gate on
      ;; whether preservation can clash with anything is an `empty?` on it
-     (note-preserving! kb (:sentence s) true)
+     (note-preserving! kb (sx/sentence-of s) true)
      [h s])))
 
 (defn canonical-sentence
@@ -2590,12 +2645,11 @@
   whole job is to make a list of justifications order-independent would itself be keyed
   on arrival.
 
-  **The informant is ordered with the rest, not pinned to a position.**  It is named by
-  the record's own `:informant` slot, so a position would restate it; half the engine's
-  informants are symbols (`rewriteOf`, `functional`) that are no part of the vector at
-  all, so a position rule could not hold uniformly where one order over every antecedent
-  does.  Nothing reads a position: belief reads the antecedents as a **set**
-  (`jtms/valid?`, `jtms/has-justification?`), and `why` lifts the rule out by identity.
+  **The informant is not in the stored vector.**  A rule is named by the record's own
+  `:informant` slot, and `jtms/->just` takes it out of a firing's handle list after this
+  orders the list; half the engine's informants are symbols (`rewriteOf`, `functional`)
+  with no handle at all.  Nothing reads a position: belief reads the antecedents as a
+  **set** (`jtms/valid?`, `jtms/has-justification?`).
 
   Keyed once per antecedent rather than once per comparison, and short-circuited below
   two: this runs on the derivation path, where a firing builds one vector per placement
@@ -2618,7 +2672,7 @@
   ;; drop the tie back onto the arrival order this exists to remove.  The key is built
   ;; once per antecedent (not once per comparison), and a run of one is left as it came.
   (let [recs (:records kb)]
-    (nm/sort-by-content-key (fn [h] (let [s (p/get-sentex recs h)] [(:sentence s) (:context s)]))
+    (nm/sort-by-content-key (fn [h] (let [s (p/get-sentex recs h)] [(sx/sentence-of s) (:context s)]))
                             handles)))
 
 (defn justification-content-key
@@ -2663,7 +2717,7 @@
         ;; arrival order this key exists to keep out.  `core/preview` reads
         ;; `(first (supporting-justifications …))`, so the tie is not cosmetic there
         sent (fn [x] (when-let [s (some->> x (p/get-sentex recs))]
-                       [(:sentence s) (:context s)]))]
+                       [(sx/sentence-of s) (:context s)]))]
     (fn [j]
       (let [inf (:informant j)
             isx (when (integer? inf) (p/get-sentex recs inf))
@@ -2674,7 +2728,7 @@
         ;; a prefix and drop the tie back onto the id set's own order
         ;; (`antecedent-order`'s reason).  A key that must print anyway goes through
         ;; `nm/print-key`, which is where that guard lives.
-        [(if (integer? inf) (:sentence isx) inf) (:context isx)
+        [(if (integer? inf) (sx/sentence-of isx) inf) (:context isx)
          (mapv sent (:antecedents j))
          ;; sorted, because a small binding map is a `PersistentArrayMap` and iterates in
          ;; **insertion** order — which is the trigger order.  One rule reached through two
@@ -2683,7 +2737,7 @@
          ;; fired it.  Sorted into a vector of pairs, which `nm/compare-form` walks — a map
          ;; is not sequential to it.
          (when-let [b (:bindings j)] (mapv (fn [[k v]] [k v]) (into (sorted-map) b)))
-         (:sentence c) (:context c)]))))
+         (sx/sentence-of c) (:context c)]))))
 
 ;; ---- the equality closure: reading and rewriting -------------------------
 ;; The closure itself is `vaelii.impl.taxonomy`'s; the *machinery* that runs when two
@@ -2819,7 +2873,7 @@
   `wff` exists to refuse."
   [kb sentex]
   (if (rules/rule? sentex)
-    (rule-touches-merged-predicate? kb (:sentence sentex))
+    (rule-touches-merged-predicate? kb (sx/sentence-of sentex))
     (let [s (:sentence sentex)]
       (and (not (equality-sentence? s))
            (not (equality-sentence? (sx/positive-body s)))))))

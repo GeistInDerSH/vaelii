@@ -74,8 +74,8 @@ merely-default context edge, known-true facts under a bare rule conclude `:defau
 same reason — the sighting is as defeasible as the edge that carries it, and a conclusion
 stronger than the wiring it was read over is the same laundering.
 
-The **informant is excluded** from the cap, though a rule is one of its own justification's
-antecedents. That membership is what makes retracting or defeating the rule withdraw
+The **informant is not in the cap**, though a justification is valid only while its rule
+is believed. That condition is what makes retracting or defeating the rule withdraw
 everything it licensed — a *validity* role, not a ground. A rule takes `:default` unless
 its own assertion says otherwise, exactly as a fact does, so capping on it too would drop
 every datum an ordinary rule licensed to `:default`. This is why a rule's own class
@@ -594,27 +594,32 @@ hot-loop tax to weigh against the guarantee. Iterating reads take a
 shared stamp outright; they already allocate O(nodes), so the acquisition is lost in
 the walk.
 
-### The belief certificate records a clean bill, not the labels
+### A belief image is installed whole or not at all
 
-A full `recover` settles two things a cold open would otherwise redo: the JTMS labels, and
-that no definitional constraint stands in clash. The tempting way to buy back the second on
-the next open is to store the first — snapshot the JTMS labels and map them back the way the
-index image does its trie, so the open skips the whole rebuild.
-
-Do not store the labels. A label is a fixpoint over the justification graph, and a stored
-image of it is a value the open did not derive: to use it the open would have to reconcile
-it against whatever the records now say, and a label that disagrees with a re-read record is
-a belief nobody computed — [order independence](nmtms.md) spent for a warm start, and on top
-of the reason the JTMS cannot be a write-ahead log in the first place
+A label is a fixpoint over the justification graph, and one assert can move an unbounded
+region of it, so the network cannot be a write-ahead log
 ([why the index persists and these two do not](storage.md#why-the-index-persists-and-these-two-do-not)).
-A cold open can safely carry across the *permission to skip re-deriving part of it*, but
-never the answer itself. So the stamp the open reads records only that a clean close found
-no standing clash, plus the record store's slot fingerprint; belief is still rederived from
-the records on every open, and the certificate only lets the closing settle skip the
-constraint-clash scan whose result a clean close already proved. Any fingerprint mismatch
-discards it, so the
-worst a wrong certificate can do is make an open redo the scan it always did — never believe
-something no derivation produced.
+A belief image is a snapshot instead: the whole network and the state around it, written
+between operations and installed on the next open in place of a recover
+([storage.md](storage.md#the-belief-image)).
+
+An image is installed only against the exact records, source identity and policies it was
+written under, and any mismatch discards all of it. Nothing reconciles an image against
+records that moved. A partial reconciliation would label a node with a value no derivation
+over the current records produced, and a label nobody computed is the failure
+[order independence](nmtms.md) rules out. Installed whole, an image is the state of the KB
+that wrote it: an image written after a recover is that recover, and one written at close
+by a KB built assert by assert carries that KB's labels, which equal a recover's because
+belief is order independent.
+
+The stamp covers the source as well as the records because a label is a function of both:
+the same records under a changed settle rule label differently. The source identity hashes
+the engine namespaces recovery and the write entry points reach, read as forms with
+comments and docstrings removed, so a prose edit keeps an image and a code edit discards
+it. A KB running a prover or evaluatable registered from outside the engine takes no image,
+because that code is outside the digest. Every mismatch class costs a recover, which is the
+path an open without an image runs, so the worst a declined image does is make an open as
+slow as it is with no image at all.
 
 ### The bulk-load protocol is a sink, not a batched put
 

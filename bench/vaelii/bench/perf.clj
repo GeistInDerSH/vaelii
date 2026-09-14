@@ -1042,16 +1042,19 @@
   "One `retract!` of a `genlCx` edge **inside a two-context cycle**, on a KB whose
   context graph holds n unrelated contexts beside it.
 
-  Mutual visibility is a claim `genlCx` admits — two contexts see each other, and
-  OpenCyc states it — so a context sits in a strongly connected component, and a
-  deletion inside one can split it.  A split is the only edit that invalidates the
-  component map, and the map is what `sees?` reads for its O(1) same-component answer,
-  so it may not be left stale.  What the repair may cost is that component; what it may
-  not cost is the graph around it, which is the claim measured here.
+  Two contexts that see each other sit in a strongly connected component, and a deletion
+  inside one can split it.  A split is the only edit that invalidates the component map,
+  and the map is what `sees?` reads for its O(1) same-component answer, so it may not be
+  left stale.  What the repair may cost is that component; what it may not cost is the
+  graph around it, which is the claim measured here.
 
-  `genl` cycles are refused by `wff`, so this reaches `genlCx` only — and no other
-  check in this file builds a context cycle at all, which is exactly how a whole-relation
-  repair per deleted cycle edge stayed invisible.
+  A cycle-closing `genlCx` edge is refused at assert, like a `genl` one, so a live cycle
+  reaches the taxonomy only through a belief race (or a recovered store).  Each cycle
+  below forms the belief-race way (docs/taxonomy.md): `PcB → PcA` stands, a monotonic
+  negation defeats it, `PcA → PcB` asserts while no active cycle stands, and retracting the
+  defeater revives `PcB → PcA`, so the two contexts see each other.  No other check in this
+  file builds a context cycle at all, which is exactly how a whole-relation repair per
+  deleted cycle edge stayed invisible.
 
   One cycle per victim, because a handle can only be retracted once and a broken cycle
   cannot be broken again.  The unrelated contexts are the population held fixed: none of
@@ -1065,11 +1068,19 @@
       (doseq [i (range retract-victims)]
         (v/assert kb (list 'genlCx (pctx "PcA" i) 'CxPcTop) 'CxUniverse {})
         (v/assert kb (list 'genlCx (pctx "PcB" i) (pctx "PcA" i)) 'CxUniverse {})))
-    ;; the closing edges last and outside the batch: each settles, so the component map
-    ;; is built and the relation is ranked before a single reading is taken
+    ;; the closing edges last and outside the batch: each settles, so the component map is
+    ;; built and the relation is ranked before a single reading is taken.  `wff` refuses a
+    ;; cycle-closing edge, so PcA → PcB closes each cycle through a belief race — defeat the
+    ;; standing PcB → PcA, assert PcA → PcB while no active cycle stands, revive PcB → PcA —
+    ;; and the asserted PcA → PcB closing edge is the timed victim.
     (let [victims (mapv (fn [i]
-                          (v/assert kb (list 'genlCx (pctx "PcA" i) (pctx "PcB" i))
-                                    'CxUniverse {}))
+                          (let [back-edge (list 'genlCx (pctx "PcB" i) (pctx "PcA" i))
+                                d         (v/assert kb (list 'not back-edge) 'CxUniverse
+                                                    {:strength :monotonic})
+                                h         (v/assert kb (list 'genlCx (pctx "PcA" i) (pctx "PcB" i))
+                                                    'CxUniverse {})]
+                            (v/retract! kb d)
+                            h))
                         (range retract-victims))]
       (doall (for [h victims] (nanos (v/retract! kb h)))))))
 

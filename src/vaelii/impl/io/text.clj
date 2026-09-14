@@ -226,7 +226,7 @@
   rewrapped around it (`rules/rewrap` — they ride the record, not the sentence).  A fact
   carries neither and comes back unchanged."
   [sx]
-  (let [s (if-let [vm (:varmap sx)] (sx/originalize (:sentence sx) vm) (:sentence sx))]
+  (let [s (if-let [vm (:varmap sx)] (sx/originalize (sx/sentence-of sx) vm) (sx/sentence-of sx))]
     (rules/rewrap s (:direction sx) (:defeasible sx) (:assumption sx) (:constraint sx))))
 
 (defn- exception-form

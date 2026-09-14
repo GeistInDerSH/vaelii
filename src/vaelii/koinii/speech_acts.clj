@@ -138,7 +138,7 @@
       (throw (ex-info (str "koinii: cannot dispute handle " (pr-str target-handle)
                            " — it names no record in this KB")
                       {:type :koinii/no-such-handle :handle target-handle})))
-    (v/assert kb (list 'not (:sentence sx)) ctx {:creator agent})
+    (v/assert kb (list 'not (v/sentence-of sx)) ctx {:creator agent})
     (v/assert kb (list 'disputes agent (v/sentex-handle target-handle)) ctx {:creator agent})))
 
 ;; ---- retraction: the engine operation named as a move --------------------

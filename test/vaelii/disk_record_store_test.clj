@@ -15,6 +15,7 @@
             [vaelii.impl.disk.tokens :as dtok]
             [vaelii.impl.memory :as mem]
             [vaelii.impl.protocols :as p]
+            [vaelii.impl.roster :as roster]
             [vaelii.impl.sentex :as sx])
   (:import [java.io RandomAccessFile]
            [java.nio.file Files]
@@ -921,10 +922,9 @@
     (fn [dir]
       (let [s1 (drs/open-record-store dir {:tokenize? true})
             a  (p/put-sentex s1 {:sentence '(dog Muffet) :context 'C})
-            b  (p/put-sentex s1 (sx/->LiteralSentex '(bornIn Tom 1970) 'CxWell nil :true :monotonic))
-            r  (p/put-sentex s1 (sx/->RuleSentex '(implies (and (dog ?var0)) (mammal ?var0)) 'C nil
-                                                 :true '[(dog ?var0)] '(mammal ?var0) :monotonic
-                                                 '{?var0 ?x} :forward true nil nil))
+            b  (p/put-sentex s1 (sx/->LiteralSentex '(bornIn Tom 1970) 'CxWell nil :monotonic))
+            r  (p/put-sentex s1 (sx/->RuleSentex 'C nil '[(dog ?var0)] '(mammal ?var0)
+                                                 :monotonic '{?var0 ?x} :forward true nil nil))
             d  (p/put-justification s1 {:informant :rule :antecedents [a b]})]
         (testing "reads back in the same session"
           (is (= '(bornIn Tom 1970) (:sentence (p/get-sentex s1 b))))
@@ -952,7 +952,7 @@
             (try
               (is (= '(bornIn Tom 1970) (:sentence (p/get-sentex s3 b))))
               ;; and what it writes from here is a plain positional frame, beside them
-              (let [c (p/put-sentex s3 (sx/->LiteralSentex '(cat Tom) 'C nil :true nil))]
+              (let [c (p/put-sentex s3 (sx/->LiteralSentex '(cat Tom) 'C nil nil))]
                 (is (= '(cat Tom) (:sentence (p/get-sentex s3 c))))
                 (is (= '(dog Muffet) (:sentence (p/get-sentex s3 a))) "the tokenized ones keep reading"))
               (finally (drs/close! s3)))))))))
@@ -962,13 +962,13 @@
     (fn [dir]
       (let [s (drs/open-record-store dir {:tokenize? true})]
         (try
-          (p/put-sentex s (sx/->LiteralSentex '(dog Muffet) 'C nil :true nil))
+          (p/put-sentex s (sx/->LiteralSentex '(dog Muffet) 'C nil nil))
           (is (pos? (dtok/token-count (:dict s))))
           (p/clear-records! s)
           (is (zero? (dtok/token-count (:dict s)))
               "a wiped store must not carry its predecessor's vocabulary")
           ;; and it still works afterwards — ids restart from 0 against an empty log
-          (let [h (p/put-sentex s (sx/->LiteralSentex '(cat Tom) 'C nil :true nil))]
+          (let [h (p/put-sentex s (sx/->LiteralSentex '(cat Tom) 'C nil nil))]
             (is (= '(cat Tom) (:sentence (p/get-sentex s h)))))
           (finally (drs/close! s)))))))
 
@@ -981,10 +981,10 @@
     (fn [dir]
       (let [tl (str dir "/records/tokens.log")
             s1 (drs/open-record-store dir {:tokenize? true})
-            a  (p/put-sentex s1 (sx/->LiteralSentex '(dog Muffet) 'C nil :true nil))
+            a  (p/put-sentex s1 (sx/->LiteralSentex '(dog Muffet) 'C nil nil))
             ;; the dictionary exactly as of `a` — every later token is `b`'s
             after-a (do (drs/fsync s1) (.length (java.io.File. tl)))
-            b  (p/put-sentex s1 (sx/->LiteralSentex '(elephant Jumbo) 'CxZoo nil :true nil))]
+            b  (p/put-sentex s1 (sx/->LiteralSentex '(elephant Jumbo) 'CxZoo nil nil))]
         (drs/close! s1)
         (is (> (.length (java.io.File. tl)) after-a) "b introduced new vocabulary")
         ;; roll the dictionary back to that point: b's frame now cites ids that are gone
@@ -999,7 +999,7 @@
             (is (nil? (p/get-sentex s2 b)))
             ;; and the store is usable afterwards — new tokens continue from where the
             ;; rolled-back dictionary now ends
-            (let [c (p/put-sentex s2 (sx/->LiteralSentex '(cat Tom) 'C nil :true nil))]
+            (let [c (p/put-sentex s2 (sx/->LiteralSentex '(cat Tom) 'C nil nil))]
               (is (= '(cat Tom) (:sentence (p/get-sentex s2 c)))))
             (finally (drs/close! s2))))))))
 
@@ -1067,6 +1067,35 @@
             (try (is (= #{a c} (p/sentex-ids s3)))
                  (finally (drs/close! s3)))))))))
 
+(deftest a-lost-provenance-frame-leaves-its-sentex-a-premise
+  ;; A provenance record sits at its sentex's handle, so a compaction that drops a lost
+  ;; provenance frame drops that handle from the provenance kind alone.  The sentex, and
+  ;; its premise mark, stay.
+  (with-tmp
+    (fn [dir]
+      (let [s (drs/open-record-store dir)
+            z (p/put-sentex s {:sentence '(p 0) :context 'C})
+            a (p/put-sentex s {:sentence '(p 1) :context 'C :strength :monotonic})]
+        ;; z's provenance takes offset 0 of the provenance log.  A blanked slot at offset 0
+        ;; has length 0 as well, which `read-slot` and `scan-idx!` read as a zero-filled
+        ;; gap rather than a slot, so the compaction would never list it.
+        (p/put-provenance s z {:creator "test"})
+        (p/put-provenance s a {:creator "test"})
+        (drs/close! s)
+        ;; blank the provenance slot's payload length, as the sentex test above does
+        (with-open [idx (RandomAccessFile. (str dir "/records/provenance.idx") "rw")]
+          (let [slot (f/read-slot idx a)]
+            (f/write-slot! idx a (:offset slot) 0 (:flags slot) 0)))
+        (let [s2 (drs/open-record-store dir)]
+          (try
+            (is (nil? (p/get-provenance s2 a)) "the provenance record is gone")
+            (drs/compact! s2)
+            (is (= #{a} (p/premise-ids s2)) "the sentex is still a premise")
+            (is (= a (cap/some-premise-id s2)))
+            (is (= :monotonic (p/premise-strength s2 a)))
+            (is (= '(p 1) (:sentence (p/get-sentex s2 a))))
+            (finally (drs/close! s2))))))))
+
 (deftest the-live-roster-answers-beside-a-writer
   ;; The live-handle set is a `Roaring64Bitmap` mutated in place
   ;; (`vaelii.impl.roster`'s `LiveRoster`), which is what takes it from 45 bytes a handle
@@ -1122,4 +1151,82 @@
             (p/delete-sentex! s :informant)
             (is (= n (cap/count-sentexes s))
                 "and so is a non-handle, which `contains?` on the set it replaces answered"))
+          (finally (drs/close! s)))))))
+
+(deftest the-premise-roster-answers-beside-a-writer
+  ;; The premise set is a `LiveRoster` under the sentexes kind lock, the same
+  ;; representation as the live-handle set above.  Its two reads, an enumeration and a
+  ;; first premise, must hold beside a writer that puts and marks, for the same reason.
+  (with-tmp
+    (fn [dir]
+      (let [s      (drs/open-record-store dir)
+            n      2000
+            stop   (atom false)
+            errors (atom [])
+            reader (fn [read!]
+                     (future
+                       (try
+                         (loop [prev 0]
+                           (if @stop
+                             :done
+                             (recur (long (or (read!) prev)))))
+                         (catch Throwable t (swap! errors conj t) :failed))))]
+        (try
+          ;; one premise up front, so `a-premise-id` has an answer from the first tick
+          (p/put-sentex s {:sentence '(p 0) :context 'C :strength :default})
+          (let [ids   (reader #(count (p/premise-ids s)))
+                least (reader #(cap/some-premise-id s))
+                wrote (doall (for [i (range 1 (inc n))]
+                               (let [h (p/put-sentex s {:sentence (list 'p i) :context 'C})]
+                                 (p/mark-premise s h (if (even? i) :monotonic :default))
+                                 h)))]
+            (reset! stop true)
+            (is (= [:done :done] [@ids @least])
+                "two readers ran the whole write through without throwing")
+            (is (empty? @errors) (str "readers saw: " (mapv ex-message @errors)))
+            (testing "and the premise set is exactly what the writer marked"
+              (is (= (set (cons 1 wrote)) (p/premise-ids s)))))
+          (testing "a first premise is the least one, and follows an unmark and a delete"
+            (is (= 1 (cap/some-premise-id s)))
+            (p/unmark-premise! s 1)
+            (is (= 2 (cap/some-premise-id s)))
+            (p/delete-sentex! s 2)
+            (is (= 3 (cap/some-premise-id s)))
+            (is (= (dec n) (count (p/premise-ids s)))))
+          (finally (drs/close! s)))
+        (testing "a reopen reads the same premise set off the slots"
+          (let [s2 (drs/open-record-store dir)]
+            (try (is (= (set (range 3 (+ n 2))) (p/premise-ids s2)))
+                 (finally (drs/close! s2)))))))))
+
+(deftest the-enumerations-answer-an-immutable-roster
+  ;; The three enumerations answer the snapshot taken under the kind lock, a
+  ;; `HandleRoster`, rather than a `PersistentHashSet<Long>` built from it.  A later write
+  ;; does not reach a roster already handed out, and the roster compares equal to the
+  ;; Clojure set with the same members from either side of `=`.
+  (with-tmp
+    (fn [dir]
+      (let [s (drs/open-record-store dir)]
+        (try
+          (let [a   (p/put-sentex s {:sentence '(p 1) :context 'C :strength :default})
+                b   (p/put-sentex s {:sentence '(p 2) :context 'C})
+                j   (p/put-justification s {:informant a :antecedents [a] :consequence b})
+                sxs (p/sentex-ids s)
+                js  (p/justification-ids s)
+                ps  (p/premise-ids s)]
+            (is (every? roster/roster? [sxs js ps]) "each enumeration is a roster")
+            (is (= #{a b} sxs))
+            (is (= sxs #{a b}) "and equal from the roster's side too")
+            (is (= #{j} js))
+            (is (= #{a} ps))
+            (is (contains? sxs (int a)) "a handle boxed as an Integer is the same member")
+            (testing "a write after the call leaves the roster already handed out as it was"
+              (let [c (p/put-sentex s {:sentence '(p 3) :context 'C :strength :default})]
+                (p/delete-sentex! s a)
+                (is (= #{a b} sxs))
+                (is (= #{a} ps))
+                (is (= #{b c} (p/sentex-ids s)) "while a new call reads the write")
+                (is (= #{c} (p/premise-ids s)))))
+            (testing "a caller that wants a Clojure set converts with `set`"
+              (is (= #{a b 99} (conj (set sxs) 99)))))
           (finally (drs/close! s)))))))

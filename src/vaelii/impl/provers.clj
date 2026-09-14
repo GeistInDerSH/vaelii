@@ -1979,6 +1979,59 @@
   (conjunction-derivable?
    kb (sx/conjuncts (res/substitute cond {sx/defn-member-var member})) {} context))
 
+;; ---- applicability gates: is a defn even in reach, without the per-node walk? ----
+;; Both defn provers ship in the default registry, so their `applicable?` runs on EVERY
+;; ground unary goal — and the honest test, "does `coll`'s spec/genl ancestor set carry a
+;; visible defn", is a `tax/specs`/`tax/genls` walk with a `matches-visible` per node.  On a
+;; goal about a predicate that bears no defn (the overwhelming majority, even under a full
+;; upper ontology where only a dozen collections are defined) that walk finds nothing at a
+;; cost that scales with the predicate's fan-out.  Two cheaper questions decide it instead,
+;; each equivalent to the walk's emptiness test but bounded by the DECLARATIONS, not the
+;; taxonomy: first "is there any such defn fact at all" (one functor count — the whole
+;; answer on a defn-free KB), then "is any of the few declaring collections in the
+;; subsumption relation to `coll`" (a `tax/genl?` per declarer).
+
+(defn- has-defn-fact?
+  "O(1): does the store hold ANY `pred` (`defnSufficient` / `defnNecessary`) fact?  The
+  cheap pre-filter the gates and the negative fast-fail share — a defn-free KB answers
+  here, before any taxonomy read.  `stored-count-with-functor` is the same one-integer
+  gate the engine's other definitional checks front themselves with (reads.clj)."
+  [kb pred]
+  (pos? (reads/stored-count-with-functor (:index kb) pred)))
+
+(defn- defn-declaring-colls
+  "The collections carrying a visible `(pred coll _)` declaration, from `context` — the
+  arg0 of each such fact, read off the functor posting.  One per declaration, so a small
+  set even under a full ontology; empty on a KB that declares no defn of this kind."
+  [kb pred context]
+  (into #{} (keep #(get (second %) '?coll))
+        (res/matches-visible kb (list pred '?coll '?cond) context)))
+
+(defn- spec-carries-sufficient?
+  "Does `coll`'s reflexive spec ancestor set carry a visible defnSufficient — the
+  `DefnSufficientProver` applicability test, without the per-spec walk?  A declaring
+  collection is a spec of `coll` exactly when it is `coll` or a subtype of it, so this is
+  `(seq (spec-sufficient-conditions kb coll context))` decided over the declaring
+  collections and a `tax/genl?` each, independent of `coll`'s descendant count.
+  Short-circuits on a defn-free KB before touching the taxonomy."
+  [kb coll context]
+  (and (has-defn-fact? kb 'defnSufficient)
+       (let [tx (:taxonomy kb)]
+         (boolean (some (fn [d] (or (= d coll) (tax/genl? tx d coll context)))
+                        (defn-declaring-colls kb 'defnSufficient context))))))
+
+(defn- genl-carries-necessary?
+  "Does `coll`'s reflexive genl ancestor set carry a visible defnNecessary — the
+  `DefnNecessaryNegationProver` applicability test, the converse of
+  `spec-carries-sufficient?`?  A declaring collection is a genl of `coll` exactly when it
+  is `coll` or a supertype of it.  Bounded by the declaring collections, not by `coll`'s
+  ancestor count; short-circuits on a defn-free KB."
+  [kb coll context]
+  (and (has-defn-fact? kb 'defnNecessary)
+       (let [tx (:taxonomy kb)]
+         (boolean (some (fn [d] (or (= d coll) (tax/genl? tx coll d context)))
+                        (defn-declaring-colls kb 'defnNecessary context))))))
+
 (defn- spec-sufficient-conditions
   "Every defnSufficient condition in `coll`'s spec ancestor set (reflexive `tax/specs`), lazily —
   `coll`'s own and every spec's, the descent the positive walk admits on."
@@ -2005,13 +2058,14 @@
   KB: on an inconsistent one the negation prover records
   the ¬member half and this merely declines to admit."
   [kb coll member context]
-  (let [tx        (:taxonomy kb)
-        ancestors (disj (tax/genls tx coll context) coll)]
-    (boolean
-     (some (fn [g]
-             (some (fn [c] (not (condition-holds? kb c member context)))
-                   (defn-conditions kb 'defnNecessary g context)))
-           (most-general-first tx context ancestors)))))
+  (and (has-defn-fact? kb 'defnNecessary)
+       (let [tx        (:taxonomy kb)
+             ancestors (disj (tax/genls tx coll context) coll)]
+         (boolean
+          (some (fn [g]
+                  (some (fn [c] (not (condition-holds? kb c member context)))
+                        (defn-conditions kb 'defnNecessary g context)))
+                (most-general-first tx context ancestors))))))
 
 (defrecord DefnSufficientProver []
   Prover
@@ -2026,7 +2080,7 @@
          (= 1 (count (rest goal)))
          (ground? goal)
          (not (contains? *defn-stack* (first goal)))
-         (boolean (seq (take 1 (spec-sufficient-conditions kb (first goal) context))))))
+         (spec-carries-sufficient? kb (first goal) context)))
   (est-bindings [_ _ _ _] 1)                    ; a ground membership test: it holds or not
   (cost         [_ _ _ _] :compute)             ; a bounded level-6 subquery, at worst a closure
   ;; Augments `FactProver` and the forward defn rule rather than replacing them: a
@@ -2076,7 +2130,7 @@
            (and (= 1 (count (rest lit)))
                 (ground? lit)
                 (not (contains? *defn-stack* (first lit)))
-                (boolean (seq (take 1 (ancestor-necessary-conditions kb (first lit) context))))))))
+                (genl-carries-necessary? kb (first lit) context)))))
   (est-bindings [_ _ _ _] 1)                    ; a ground test: ¬member holds or it does not
   (cost         [_ _ _ _] :compute)             ; a bounded level-6 subquery, at worst a closure
   ;; Augments a stored `(not (Coll x))` (FactProver) and `ClosedExtentProver` rather than
@@ -2619,7 +2673,7 @@
            (filter #(res/rule-believed? kb (:id %)))
            (filter #(res/rule-visible-from? kb context (:context %)))
            (remove #(and hidden? (hidden? (:id %))))
-           (nm/sort-by-content-key (juxt :sentence :context))
+           (nm/sort-by-content-key (juxt sx/sentence-of :context))
            (map #(parse-rule kb % context))))))
 
 ;; ---- the engine ---------------------------------------------------------
@@ -3054,9 +3108,10 @@
   guard if it has one, and the rule's own `:handle`, which is what an executor
   accumulating supports records (`vaelii.impl.inference`)."
   [kb rule-sentex context]
-  (assoc (rules/parse (:sentence rule-sentex))
-         :guard  (rule-guard kb rule-sentex context)
-         :handle (:id rule-sentex)))
+  {:antecedents (:antecedent rule-sentex)
+   :consequent  (:consequent rule-sentex)
+   :guard       (rule-guard kb rule-sentex context)
+   :handle      (:id rule-sentex)})
 
 (defn- goal-vars [goal] (set (filter pvar? (tree-seq sequential? seq goal))))
 

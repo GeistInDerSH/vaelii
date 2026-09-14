@@ -106,7 +106,7 @@
 
 (defn- sx-content [kb id]
   (when-let [s (p/get-sentex (:records kb) id)]
-    [(:sentence s) (:context s) (:polarity s)]))
+    [(v/sentence-of s) (:context s)]))
 
 (defn stored-content [kb]
   (into #{} (keep #(sx-content kb %)) (p/sentex-ids (:records kb))))

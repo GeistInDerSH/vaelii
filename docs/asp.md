@@ -63,13 +63,23 @@ clingo below, clasp above) and loads the clingo namespace lazily via
 `requiring-resolve`, so JNA stays genuinely optional. Force one with
 `-Dvaelii.asp.solver=clingo|clasp` or `VAELII_ASP_SOLVER`.
 
+The in-process solve writes no ASPIF text. `backend-batch!` interns each program atom as
+the symbol `a(<id>)` carrying its label and emits every rule into a live control through
+the `clingo_backend_*` accessors; a model's true atoms come back through
+`clingo_model_symbols` and map to labels through that symbol association. `clasp` still
+reads the rendered ASPIF text. `vaelii.impl.asp.clingo` also holds an incremental session
+API — `open-session`, `add-program!`, `declare-external!`, `assign-external!`,
+`solve-session`, `close-session!`. A session grows one live control a batch at a time and
+changes an external atom's truth between solves without re-grounding. No engine path opens
+a session.
+
 ### Why size picks the backend
 
 In-process clingo saves the subprocess fork — about 4× faster cold on a small program —
-and pays a steeper per-solve slope that loses at scale. The driver is I/O and marshaling
-rather than model count: libclingo's `load_aspif` reads a `FILE`, so an in-process solve
-still writes the whole ASPIF to a temp file and re-parses it, and only the ~5 ms fork is
-actually avoided; it then JNA-marshals every witness symbol back across the JNI boundary.
+and pays a steeper per-solve slope that loses at scale. The driver is marshaling rather
+than model count: an in-process solve makes one JNA call per ground statement to emit the
+program into the backend, and then JNA-marshals every witness symbol back across the JNI
+boundary.
 Both costs scale with program and witness **size**, in every mode rather than only under
 brave/cautious enumeration — which is what makes byte length a sound cross-mode proxy, and
 one cutoff enough for all of them.

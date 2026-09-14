@@ -339,10 +339,11 @@ VAELII_API_TOKEN=… lein serve 4200 /var/lib/vaelii --listen 0.0.0.0   # off-ma
   sorting it means two daemons over one store answer the same bytes.
   `:canonical-sentex` is the content identity of a sentence that was never stored, which
   is the read behind content-addressing one ([canonicalization.md](canonicalization.md)).
-- **Four ops take no KB** — `:levels`, `:calculi`, `:readable-sentence` and
-  `:quality-report` (above) — and are in
+- **Five ops take no KB** — `:levels`, `:calculi`, `:readable-sentence`, `:sentence-of`
+  and `:quality-report` (above) — and are in
   the table all the same, because a client that has to *display* a stored rule needs the
-  author's variable names put back and cannot compute them from a sentex map alone. The
+  author's variable names put back and cannot compute them from a sentex map alone, and a
+  rule map carries no `:sentence`, so `:sentence-of` builds its canonical `implies` form. The
   daemon supplies a KB to every row of `serve/ops`; `serve/kbless-ops` is the roster of
   the rows that drop it, held as data because two generators read the table and both have
   to know whether an op's first `vaelii.core` parameter is the KB or an argument.
@@ -747,7 +748,7 @@ representation nobody chose.
 | `vaelii.disk.lock` | `src/vaelii/impl/config.clj:210+` | the boolean vocabulary | `true` | Whether the single-writer `FileLock` is taken when a directory opens. Off removes the enforcement and not the contract. |
 | `vaelii.index.snapshot` | `src/vaelii/impl/config.clj:230+` | none — the domain is empty and every value is refused | unset | **Refused, not read.** The mapped index image is an index representation, so it is named in the KB's opts (`{:backend :disk-snapshot}`) and not process-wide. `config/check!` reads it at every `open-kb`, so a `-D` left over from an older unit file fails the open with `:unknown-option` naming the backend to take instead — rather than a KB quietly rebuilding the index the property was meant to save. |
 | `vaelii.index.snapshot-drift` | `src/vaelii/impl/config.clj:250+` | a ratio, 0–1 | `0.5` | How far a `:disk-snapshot` KB's live index may drift from its image — in indexed roots, against the count the image holds — before the writer rewrites it. The rewrite happens on the writer's thread and is a full image write, so `vaelii.disk.compact-min-interval-ms` floors how often it can happen. **`0` is the most eager setting in the range, not the off one**: as a threshold it means "any drift at all", so it rewrites the image on every write past the floor — 400 asserts under it measured 401 images. `vaelii.disk.auto-compact=false` is what turns the mid-life refresh off. Only `assert` drives the cadence: a store filled by `reindex` or by an import gets one image, at the close, whatever this says. |
-| `vaelii.belief.snapshot` | `src/vaelii/impl/config.clj:230+` | the boolean vocabulary | `false` | Whether a belief certificate is written on a full recover and read on the next cold open, letting a clean disk KB skip the closing settle's definitional-clash scan. Off is byte-identical to never having the file. |
+| `vaelii.belief.snapshot` | `src/vaelii/impl/config.clj:270+` | none — the domain is empty and every value is refused | unset | **Refused, not read.** A belief image is written and installed for every `{:backend :disk-snapshot}` KB on the dense network ([storage.md](storage.md#the-belief-image)), and no property turns it on or off. `config/check!` reads it at every `open-kb`, so a `-D` left in a unit file fails the open with `:unknown-option` naming the backend to take instead. |
 
 **Finding a KB.**
 
@@ -768,6 +769,9 @@ representation nobody chose.
 | `vaelii.asp.solver` | `src/vaelii/impl/config.clj:50+` | `clingo` `clasp` | unset | The same choice, and it is read **first**. |
 | `VAELII_CLINGO_MAX_BYTES` | `src/vaelii/impl/config.clj:280+` | a whole number of bytes, 0 or more | `3000` | The program size above which auto mode routes a plain-ASP program to clasp even where clingo loads. |
 | `VAELII_ASP_TIME_LIMIT` | `src/vaelii/impl/config.clj:290+` | a whole number of seconds, 0 or more | `60` | How long one ASP solve may run before the backend is interrupted; 0 lifts the limit. An interrupted solve is no answer: the edge solver decides nothing and an imperative refuses with `:solver-failed`. One *operation* makes several solves, each with the whole budget ([asp.md](asp.md)). |
+| `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS` | `src/vaelii/impl/config.clj:400+` | a whole number ≥ 1 | `12` | The most members a coupled dilemma cluster may hold for the solve-free brave/cautious classifier to enumerate its resolutions; a larger cluster is left `:supportable`, and a backend is the tool for the large interacting set. Read per classification by `classify-local`, which reads resolutions from the JTMS and calls no solver ([labeling.md](labeling.md)). |
+| `VAELII_CLASSIFY_RESOLUTION_BUDGET` | `src/vaelii/impl/config.clj:400+` | a whole number ≥ 1 | `20000` | The number of candidate subsets one cluster's resolution enumeration may examine before the classifier abandons the cluster to `:supportable`. A cluster of *m* members has 2^*m* − 1 candidates, so under the default member cap of 12 (at most 4,095) the budget binds only once `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS` is raised above 14. A per-read search bound, nothing retained. |
+| `VAELII_CLASSIFY_MAX_JOINT_OPTIMA` | `src/vaelii/impl/config.clj:400+` | a whole number ≥ 1 | `1024` | The cap on the product of optima a cross-cluster datum's classification enumerates — the clusters that move the datum, times their optima. A datum whose product is larger is left `:supportable`, since its class needs joint resolutions a backend enumerates. |
 | `vaelii.clingo.lib` | `src/vaelii/impl/asp/clingo.clj:20+` | a library name or an absolute path | `clingo`, resolved through `jna.library.path` | Which libclingo the in-process bridge loads. |
 
 **The model host.**
@@ -847,7 +851,7 @@ inputs to the colour decision and not knobs of this project's.
 | `VAELII_BENCH_STORE` | `bench/vaelii/bench/survey.clj:360+` | a directory holding a record log | `~/.vaelii/kbs/store` | The corpus the real-corpus benchmarks sample when the command line names none. |
 | `VAELII_SURVEY_STORE` | `bench/vaelii/bench/survey.clj:20+` | a directory holding a record log | as above | A second name for the same directory, read when the row above is unset. |
 | `VAELII_PYRAMID_CORPUS` | `bench/vaelii/bench/pyramid.clj:20+` | a directory holding `vaelii.txt` | none — a run without it is refused, naming itself | The join.1k corpus the pyramid benchmark reads. It is a field-harness artifact and is not in this repo, so a default could only name whoever wrote one. |
-| `VAELII_RECOVER_CORPUS` | `bench/vaelii/bench/recoverphase.clj:740+` | a directory holding a `:disk` store of sentexes | none — a store-reading run without it is refused, naming itself | The corpus the recover benchmark's store-reading modes read when the command line names no path. A dev-box `:disk` store, not in this repo, so a default could only name whoever wrote one. |
+| `VAELII_RECOVER_CORPUS` | `bench/vaelii/bench/recoverphase.clj:570+` | a directory holding a `:disk` store of sentexes | none — a store-reading run without it is refused, naming itself | The corpus the recover benchmark's store-reading modes read when the command line names no path. A dev-box `:disk` store, not in this repo, so a default could only name whoever wrote one. |
 | `vaelii.memo.budget` | `bench/vaelii/bench/recoverphase.clj:90+` | a whole number of distinct visibility sets | `8192` | The `*scoped-memo-budget*` the recover benchmark binds while it recovers, so the scoped-closure cache the phase runs under is a knob rather than the code's steady-state constant. |
 
 ## Not here

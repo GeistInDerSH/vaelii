@@ -287,7 +287,7 @@
     (reduce (fn [g h]
               (let [sx (p/get-sentex recs h)
                     c  (some-> (:consequent sx) nm/functor)
-                    as (into #{} (keep nm/functor) (rules/antecedents (:sentence sx)))]
+                    as (into #{} (keep nm/functor) (:antecedent sx))]
                 (if c (update g c (fnil into #{}) as) g)))
             {} handles)))
 

@@ -85,13 +85,21 @@
 
 ;; ---- the abduction context ----------------------------------------------
 
-(defn- token
+(defn new-token
   "A fresh context token.  Random rather than content-keyed, and deliberately: two
   abductions of one goal in one process must not share a scratch context.  Nothing about
   belief depends on the name — the caller reads the context out of the result rather than
   predicting it — and it is torn down before it could matter to anything else."
   []
   (str/replace (subs (str (java.util.UUID/randomUUID)) 0 13) "-" ""))
+
+(def ^:dynamic *token*
+  "The token the abduction context is named by, or nil for a fresh one.  `vaelii.core`
+  binds it to the token an operation-log frame records for an `abduce` call
+  (`vaelii.impl.oplog`), so the recorded call names the context the call named."
+  nil)
+
+(defn- token [] (or *token* (new-token)))
 
 (defn context-for
   "The abduction context named by `token`.  `CxAbduction<token>` satisfies the

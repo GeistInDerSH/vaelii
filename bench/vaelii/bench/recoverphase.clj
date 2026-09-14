@@ -51,15 +51,10 @@
     all                 decomp defaults + fetchfix 300000 + equality defaults
   Large sizes want heap: prefix with
     lein update-in :jvm-opts conj '\"-Xmx24g\"' -- with-profile +bench run -m vaelii.bench.recoverphase …"
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
-            [clojure.pprint :as pprint]
-            [clojure.set :as set]
-            [taoensso.nippy :as nippy]
+  (:require [clojure.java.io :as io]
             [vaelii.core :as v]
             [vaelii.impl.chain :as chain]
             [vaelii.impl.disk.backend :as disk]
-            [vaelii.impl.disk.belief-snapshot :as bs]
             [vaelii.host.io.generate :as gen]
             [vaelii.impl.jtms :as jtms]
             [vaelii.impl.kb :as kb]
@@ -531,164 +526,13 @@
     (disk/close-dir! dir)
     (println (format "%n  [%s] done." (now-str)))))
 
-;; ---- mode: snapshot-verify ----------------------------------------------
-;; Prove the belief certificate end to end on the real corpus:
-;;   1. full recover → capture belief (the OUT set, keyed by content so it is
-;;      stable across the re-open) + the notes (:clashes, :contradictions);
-;;   2. dump :complete (belief + notes) and :minimal (belief only) with nippy,
-;;      report both sizes, and check the :complete dump round-trips losslessly;
-;;   3. re-open fresh and recover with the disjointness scan SKIPPED
-;;      (`*skip-constraint-nogoods*`), the :minimal fast path — then assert its
-;;      belief equals the full recover's, and time it.
-;; The whole thesis in one run: belief is reproducible without the 14-min scan, the
-;; notes are the only thing lost, and the dump is small.
-
-(defn- capture-belief
-  "The disbelieved sentexes as a content-keyed set `#{[sentence context] …}` — stable
-  across a re-open, where raw handles are not."
-  [kb]
-  (let [recs (:records kb) tms (:tms kb)]
-    (into #{}
-          (comp (remove #(jtms/in? tms %))
-                (keep (fn [id] (when-let [s (p/get-sentex recs id)]
-                                 [(:sentence s) (:context s)]))))
-          (p/sentex-ids recs))))
-
-(defn- capture-notes
-  "The clash notes in a reload-stable, EDN-friendly form: each nogood as its two
-  sides' content `{:sides [[sentence context] …] :kind kw :priority n}` — no handles
-  (unstable across a re-open) and no justifications (re-derivable from records), which
-  is what bloated the raw structure past nippy's guard.  Pure data, so it reads back
-  through `clojure.edn`."
-  [kb]
-  (let [recs (:records kb)
-        side (fn [id] (when-let [s (p/get-sentex recs id)] [(:sentence s) (:context s)]))]
-    (into []
-          (keep (fn [ng]
-                  (let [sd (into [] (keep side) (:nogood ng))]
-                    (when (= 2 (count sd))
-                      {:sides sd :kind (:kind ng) :priority (:priority ng)}))))
-          (vals (:nogoods (deref (:clashes kb)))))))
-
-(defn- spit-edn
-  "Write `data` as EDN — pretty-printed when `pretty?`, else a single `pr-str` line
-  (still valid EDN, greppable, and fast for the large `:complete` payload)."
-  [f data pretty?]
-  (binding [*print-length* nil *print-level* nil]
-    (spit f (if pretty? (with-out-str (pprint/pprint data)) (pr-str data)))))
-
-(defn- resolve-id
-  "The handle in `kb` of the sentex whose content is `[sentence context]`, via the
-  arg-1 posting index (a handful of candidates), or nil.  Content, not handle, because
-  handles are re-allocated on a fresh open."
-  [kb [sen ctx]]
-  (let [recs (:records kb)
-        a1   (when (sequential? sen) (second sen))]
-    (when (some? a1)
-      (some (fn [h] (let [s (p/get-sentex recs h)]
-                      (when (and s (= (:sentence s) sen) (= (:context s) ctx)) (:id s))))
-            (p/sentexes-with-arg (:index kb) 1 a1)))))
-
-(defn- snapshot-verify-run [^String dir index-kind]
-  (println (format "%n=== snapshot verify: %s (index %s) ===" dir index-kind))
-  (let [f-comp (str dir "/belief-complete.edn")
-        f-min  (str dir "/belief-minimal.edn")
-        out0
-        (let [kb (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
-          (println (format "  [%s] reindex + full recover…" (now-str)))
-          (reindex/reindex kb)
-          ;; the full/fast A/B holds the budget fixed on both sides, so it reads the
-          ;; default rather than the property — the comparison is of recover strategies
-          (binding [tax/*scoped-memo-budget* default-memo-budget] (timed-recover! kb))
-          (let [out0     (capture-belief kb)
-                clashes  (deref (:clashes kb))
-                notes    (capture-notes kb)
-                minimal  {:out (vec out0)}
-                complete {:out (vec out0) :notes notes}]
-            (spit-edn f-min minimal true)
-            (spit-edn f-comp complete false)
-            (println (format "  OUT %,d · clash pairs %,d · notes captured %,d"
-                             (count out0) (count (:pairs clashes)) (count notes)))
-            (println (format "  :minimal.edn = %,d bytes · :complete.edn = %,d bytes"
-                             (.length (io/file f-min)) (.length (io/file f-comp))))
-            (println (format "  EDN round-trip lossless?  :minimal %s · :complete %s"
-                             (= minimal  (edn/read-string (slurp f-min)))
-                             (= complete (edn/read-string (slurp f-comp)))))
-            (disk/close-dir! dir)
-            out0))]
-    (println (format "%n  [%s] fast reload — recover with the disjointness scan SKIPPED…" (now-str)))
-    (let [kb2 (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
-      (reindex/reindex kb2)
-      (let [[_ fast-ms] (timed (binding [tax/*scoped-memo-budget*        default-memo-budget
-                                         settle/*skip-constraint-nogoods* true]
-                                 (timed-recover! kb2)))
-            out1 (capture-belief kb2)]
-        (println (format "  fast recover %.0f ms (%.2f min) — clashes now %,d"
-                         (double fast-ms) (/ (double fast-ms) 60000.0)
-                         (count (:pairs (deref (:clashes kb2))))))
-        (println (format "  belief reproduced WITHOUT the scan? %s   (fast OUT %,d vs full OUT %,d)"
-                         (= out0 out1) (count out1) (count out0)))
-        (when (not= out0 out1)
-          (println (format "    only in full recover: %s" (vec (take 8 (set/difference out0 out1)))))
-          (println (format "    only in fast reload : %s" (vec (take 8 (set/difference out1 out0))))))
-        (disk/close-dir! dir)))
-    ;; --- pass 3: read-only WARM reload — rebuild-tms + taxonomy (the ~5-min floor),
-    ;; then force belief from the :minimal.edn certificate, running NO settle.  This is
-    ;; the aggressive path the tiny file is for: labels are forced (exception mechanisms
-    ;; are not reinstalled, so it is read-only), and the whole clash + exception
-    ;; derivation is skipped.
-    (println (format "%n  [%s] warm reload — structural rebuild only, then force belief from EDN…" (now-str)))
-    ;; `:tms :reference` on purpose: this pass forces the OUT set by poking the TMS state
-    ;; atom directly (`.-state` below), which only the atom-backed `RefTms` carries — the
-    ;; default `:dense` TMS has no such field, so on it the force step throws.
-    (let [kb3 (v/open-kb {:records :disk :index index-kind :dir dir :recover? false :tms :reference})]
-      (reindex/reindex kb3)
-      (let [[_ rebuild-ms]
-            (timed (do (rebuild-tms-split! kb3)
-                       (binding [tax/*defer-depths?* true]
-                         (special/rebuild-taxonomy kb3)
-                         (tax/refresh-beliefs (:taxonomy kb3) #(jtms/in? (:tms kb3) %)))
-                       (tax/restore-depths (:taxonomy kb3))))]
-        (println (format "  structural rebuild (no settle) %.0f ms (%.2f min) — natural OUT %,d"
-                         (double rebuild-ms) (/ (double rebuild-ms) 60000.0) (count (capture-belief kb3))))
-        (try
-          (let [want (:out (edn/read-string (slurp f-min)))
-                [ids force-ms] (timed (into [] (keep #(resolve-id kb3 %)) want))
-                st   (.-state ^vaelii.impl.jtms.RefTms (:tms kb3))]
-            (swap! st update :in (fn [in] (reduce disj in ids)))
-            (let [out3 (capture-belief kb3)]
-              (println (format "  resolved %,d / %,d handles in %.0f ms; forced OUT"
-                               (count ids) (count want) (double force-ms)))
-              (println (format "  belief matches full recover? %s   (warm OUT %,d vs full OUT %,d)"
-                               (= out0 out3) (count out3) (count out0)))
-              (when (not= out0 out3)
-                (println (format "    only in full: %s" (vec (take 6 (set/difference out0 out3)))))
-                (println (format "    only in warm: %s" (vec (take 6 (set/difference out3 out0))))))))
-          (catch Throwable t
-            (println (format "  force-belief step FAILED: %s" (.getMessage t)))))
-        (disk/close-dir! dir))))
-  (println (format "%n  [%s] done." (now-str))))
-
-(defn- show-belief-run [^String npy]
-  (let [data (nippy/thaw-from-file npy)
-        out  (:out data)
-        edn  (str npy ".edn")]
-    (println (format "%n=== belief certificate: %s ===" npy))
-    (println (format "  OUT entries: %,d" (count out)))
-    (spit-edn edn {:out (vec (sort-by pr-str out))} true)
-    (println (format "  wrote human-readable EDN: %s (%,d bytes)" edn (.length (io/file edn))))
-    (println "  --- disbelieved sentexes (first 30, sorted) ---")
-    (doseq [[sen ctx] (take 30 (sort-by pr-str out))]
-      (println (format "    %s  @%s" (pr-str sen) ctx)))))
-
-;; ---- mode: beliefcert ---------------------------------------------------
-;; The belief certificate end to end against the real store, through the *production*
-;; `core/recover` (not the unrolled `timed-recover!` — the certificate is consulted inside
-;; `recover` itself).  Pass 1 mints it: a full recover, clash scan and all, writes the
-;; stamp.  Pass 2 reopens cold and takes the certified fast path.  The two beliefs must
-;; agree, and the two recover times are the saving.  One JVM, so pass 2's records are warm
-;; in the OS cache — the honest shape of a restart, and it isolates the delta to the one
-;; pass the fast path drops: the definitional-clash scan.
+;; ---- mode: beliefimage ---------------------------------------------------
+;; The belief image end to end against a real `:disk-snapshot` store, through the
+;; production open (`:recover? :auto`).  Pass 1 opens with the image's manifest removed,
+;; so the open recovers from the records and writes a fresh image; pass 2 opens again
+;; and installs it.  The two beliefs must agree handle for handle, and the two open
+;; times are the saving.  Removing the manifest discards a cache: pass 1's recover writes
+;; the image again from the records.
 
 (defn- clash-pairs [kb] (count (:pairs (some-> (:clashes kb) deref))))
 
@@ -698,57 +542,31 @@
   (let [n (count (p/sentex-ids (:records kb))) in (in-count kb)]
     [in (- n in)]))
 
-(defn- beliefcert-run [^String dir index-kind]
-  (System/setProperty "vaelii.belief.snapshot" "true")
-  (println (format "%n=== belief certificate: %s (index %s) ===" dir index-kind))
+(defn- beliefimage-run [^String dir]
+  (println (format "%n=== belief image: %s ===" dir))
+  (.delete (io/file dir "belief" "manifest.edn"))
   (binding [tax/*scoped-memo-budget* (memo-budget)]
-    ;; ---- PASS 1: mint (a full recover writes the certificate) ----
-    (println (format "  [%s] PASS 1 mint — open cold" (now-str)))
-    (let [kb1   (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})
-          nsent (count (p/sentex-ids (:records kb1)))]
-      (println (format "  records: %,d sentexes" (long nsent)))
-      (println (format "  usable? before mint: %s (expect false — no certificate yet)"
-                       (bs/usable? (:records kb1))))
+    (println (format "  [%s] PASS 1 — open, recover from the records, write the image" (now-str)))
+    (let [[kb1 t1]   (timed (v/open-kb {:backend :disk-snapshot :dir dir}))
+          [in1 out1] (belief-census kb1)
+          cp1        (clash-pairs kb1)]
+      (println (format "  open %.2f min · in %,d · out %,d · clash-pairs %,d — %s"
+                       (/ t1 60000.0) (long in1) (long out1) (long cp1) (heap-str)))
+      (disk/close-dir! dir)
       (gc!)
-      (let [[_ ix1] (timed (reindex/reindex kb1))]
-        (println (format "  reindex %.2f min — %s" (/ ix1 60000.0) (heap-str)))
-        (gc!)
-        (println (format "  [%s] recover (full, mints certificate)…" (now-str)))
-        (let [[_ rc1]   (timed (v/recover kb1))
-              [in1 out1] (belief-census kb1)
-              cp1       (clash-pairs kb1)
-              meta      (bs/read-meta (:records kb1))]
-          (println (format "  MINT  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s"
-                           (/ rc1 60000.0) (long cp1) (long in1) (long out1) (heap-str)))
-          (println (format "  certificate: clean? %s · out-count %,d · clash-count %,d · clash-losers %,d"
-                           (:clean? meta) (long (:out-count meta)) (long (:clash-count meta))
-                           (long (:clash-losers meta))))
-          (disk/close-dir! dir)
-          (gc!)
-          ;; ---- PASS 2: fast (the certificate skips the clash scan) ----
-          (println (format "%n  [%s] PASS 2 fast — reopen cold" (now-str)))
-          (let [kb2 (v/open-kb {:records :disk :index index-kind :dir dir :recover? false})]
-            (println (format "  usable? %s (expect true — clean stamp matches records)"
-                             (bs/usable? (:records kb2))))
-            (let [[_ ix2] (timed (reindex/reindex kb2))]
-              (println (format "  reindex %.2f min — %s" (/ ix2 60000.0) (heap-str)))
-              (gc!)
-              (println (format "  [%s] recover (fast, certificate skips the scan)…" (now-str)))
-              (let [[_ rc2]   (timed (v/recover kb2))
-                    [in2 out2] (belief-census kb2)
-                    cp2       (clash-pairs kb2)]
-                (println (format "  FAST  recover %.2f min · clash-pairs %,d · in? %,d · out %,d — %s"
-                                 (/ rc2 60000.0) (long cp2) (long in2) (long out2) (heap-str)))
-                (disk/close-dir! dir)
-                (println "\n  === VERDICT ===")
-                (println (format "  belief identical: %s   (in %,d==%,d · out %,d==%,d)"
-                                 (= [in1 out1] [in2 out2])
-                                 (long in1) (long in2) (long out1) (long out2)))
-                (println (format "  recover  full %.2f min → fast %.2f min   (%.2f min saved, %.1f%%)"
-                                 (/ rc1 60000.0) (/ rc2 60000.0) (/ (- rc1 rc2) 60000.0)
-                                 (if (pos? rc1) (* 100.0 (/ (- rc1 rc2) rc1)) 0.0)))
-                (println (format "  clash records: full %,d → fast %,d (the fast path rederives none)"
-                                 (long cp1) (long cp2)))))))))))
+      (println (format "%n  [%s] PASS 2 — open, install the image" (now-str)))
+      (let [[kb2 t2]   (timed (v/open-kb {:backend :disk-snapshot :dir dir}))
+            [in2 out2] (belief-census kb2)
+            cp2        (clash-pairs kb2)
+            mism       (reduce (fn [c id] (if (= (jtms/in? (:tms kb1) id) (jtms/in? (:tms kb2) id)) c (inc c)))
+                               0 (p/sentex-ids (:records kb2)))]
+        (println (format "  open %.2f min · in %,d · out %,d · clash-pairs %,d — %s"
+                         (/ t2 60000.0) (long in2) (long out2) (long cp2) (heap-str)))
+        (disk/close-dir! dir)
+        (println "\n  === VERDICT ===")
+        (println (format "  in? disagreements: %,d · clash-pairs %,d == %,d: %s"
+                         (long mism) (long cp1) (long cp2) (= cp1 cp2)))
+        (println (format "  open  recover %.2f min → image %.2f min" (/ t1 60000.0) (/ t2 60000.0)))))))
 
 (defn- default-corpus
   "The corpus directory the store-reading modes default to when given no path.
@@ -775,11 +593,7 @@
       "cleanup-preview" (cleanup-preview-run (or (second args) (default-corpus))
                                              (keyword (or (nth args 2 nil) "columnar")))
       "disjoint-audit" (disjoint-audit-run (or (second args) (default-corpus)))
-      "snapshot-verify" (snapshot-verify-run (or (second args) (default-corpus))
-                                             (keyword (or (nth args 2 nil) "columnar")))
-      "beliefcert" (beliefcert-run (or (second args) (default-corpus))
-                                   (keyword (or (nth args 2 nil) "columnar")))
-      "show-belief" (show-belief-run (or (second args) (str (default-corpus) "/belief-minimal.npy")))
+      "beliefimage" (beliefimage-run (or (second args) (default-corpus)))
       "equality" (equality-run (if (next args)
                                  (map parse-long (rest args))
                                  [2 4 8 16 32 64]))

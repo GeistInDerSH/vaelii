@@ -45,7 +45,6 @@ vaelii.attitude-opacity-test	0.92
 vaelii.backend-parity-test	0.16
 vaelii.backward-test	1.30
 vaelii.belief-projection-test	7.37
-vaelii.belief-snapshot-test	0.14
 vaelii.belief-status-test	0.13
 vaelii.budget-test	0.15
 vaelii.bulk-sink-test	0.10

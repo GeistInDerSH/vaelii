@@ -177,7 +177,7 @@
   ;; import would have filled: nothing in this KB's own assert path can produce one
   (let [real acc/sentexes-with-functor
         self {:id -1 :sentence '(disjoint nothing nothing) :context 'CxUniverse
-              :polarity :positive :strength :monotonic}]
+              :strength :monotonic}]
     (with-redefs [acc/sentexes-with-functor
                   (fn [target pred & args]
                     (cond-> (apply real target pred args)

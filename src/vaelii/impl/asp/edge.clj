@@ -288,7 +288,9 @@
                     (mapcat (fn [[ng v]]
                               [(aspif/rule v (concat (mapv atom-of (pos ng))
                                                      (mapv #(- (atom-of %)) (neg ng))))
-                               (aspif/minimize (levels (:priority ng)) [[v 1]])])
+                               ;; a minimize / priority soft carries its per-head weight
+                               ;; (`:weight`); an ordinary soft costs 1
+                               (aspif/minimize (levels (:priority ng)) [[v (:weight ng 1)]])])
                             v-atoms)
                     ;; hard cardinality: ONE weight-body integrity constraint per group —
                     ;; `:infeasible` (a `asp/atLeast` bound no group can meet) is an empty

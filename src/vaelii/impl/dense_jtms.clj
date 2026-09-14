@@ -33,14 +33,20 @@
     superseded                             atom of a persistent map  (sparse)
   ```
 
+  The depths, the two adjacency maps and the three justification columns keyed by id are
+  the fact-scaled half of that table, and the network reaches them through the
+  `TmsColumns` interface rather than as fields.  `HeapColumns` holds them in the fastutil
+  maps above.  Every relabel, sweep and mutation below is written once against the
+  interface, so an implementation that holds the six elsewhere runs the same fixpoint.
+
   Two of those deserve their reasons.  **The defeat-classes are one bitmap** because
   the lattice has exactly two elements (`vaelii.impl.strength` — monotonic > default,
   and the reference already stores only the entries *above* the bottom), so \"the
   class map\" is precisely \"the set of monotonic datums\".  **Adjacency reuses Phase
   1's `IntPostings`** (a sorted `int[]` promoted to a bitmap past 128) rather than a
   bare `int[]`: a node's supports are usually one or two, but the *consequences* of a
-  much-used premise — a rule handle is an antecedent of every justification it
-  licensed — grow without bound, and an array-copy insert would make loading such a
+  much-used premise — a rule's node lists every justification it licensed — grow
+  without bound, and an array-copy insert would make loading such a
   rule quadratic.
 
   ## Why this is a second implementation and not a swap
@@ -90,12 +96,15 @@
   that would collide two handles, so belief is never corrupted.  A KB that expects to
   churn past 2^31 pins `{:tms :reference}`, whose `Long`-keyed persistent maps have no
   such ceiling.  This is measured in density.md."
-  (:require [vaelii.impl.dense-kv :as dense]
+  (:require [taoensso.nippy :as nippy]
+            [vaelii.impl.dense-kv :as dense]
             [vaelii.impl.jtms :as jtms]
             [vaelii.impl.jtms-protocol :refer [Tms]]
             [vaelii.impl.observe :as observe]
             [vaelii.impl.strength :as strength])
   (:import [it.unimi.dsi.fastutil.ints Int2IntOpenHashMap Int2ObjectOpenHashMap]
+           [java.io DataInput DataOutput]
+           [java.util Arrays]
            [java.util.concurrent.locks StampedLock]
            [org.roaringbitmap RoaringBitmap]))
 
@@ -141,47 +150,121 @@
 ;;   bindings       80 B   never read by belief               -> the record store's
 ;;   antecedents    73 B   a vector of boxed handles          -> one int[]
 ;;   consequence     6 B                                      -> an int column
-;;   id/informant/strength/out   0 B   shared objects already
+;;   id/informant/strength       0 B   shared objects already
 ;; ```
 ;;
 ;; `informant` splits in two because it is either a rule handle or a symbol
 ;; (`:premise`, a special-predicate name).  Both columns' values are compared with `=`
 ;; and never arithmetic, so an int column and an object column answer alike; the int
 ;; one exists so the common case cannot depend on a caller happening to share its
-;; boxed handle.  `strength` is one bitmap for the same reason the class map is: the
-;; lattice has two elements.
+;; boxed handle.  A rule handle lives in `j-inf` alone: `j-antes` never repeats it
+;; (`jtms/graph-just`), and `valid?` and the adjacency read the two columns together.
+;; `strength` is one bitmap for the same reason the class map is: the lattice has two
+;; elements.
 
 (def ^:private ^:const no-informant
   "The `informant` column's absent marker — a justification whose informant is not a
   handle is in the object column instead."
   Integer/MIN_VALUE)
 
-;; ---- adjacency: datum -> the justification ids touching it --------------
+;; ---- the columns: depth, adjacency and the justification columns ---------
+;;
+;; `TmsColumns` is every read and write the network makes of its six fact-scaled
+;; structures.  Adjacency maps a datum to the justification ids touching it: `supports`
+;; lists the ones concluding it, `dependents` the ones citing it as an antecedent or as
+;; their rule.  The justification columns map an id to its consequence, its informant
+;; when that is a handle, and its antecedents.
+;;
+;; Every read is total over an id the columns do not hold: no adjacency, depth 0,
+;; consequence -1, the `no-informant` marker, and no antecedents.  An adjacency read
+;; returns a fresh `int[]`, so a caller may walk it while writing the same posting.  A
+;; posting emptied by a removal is dropped, so a torn-down node leaves no entry.
 
-(defn- adj-ints
-  "The justification ids at `d` as an `int[]` — empty when the node has none.  Fresh,
-  so a caller may walk it while mutating the posting."
-  ^ints [^Int2ObjectOpenHashMap m d]
+(definterface TmsColumns
+  (^ints supportsOf [^int d])
+  (^ints dependentsOf [^int d])
+  (addSupport [^int d ^int jid])
+  (addDependent [^int d ^int jid])
+  (removeSupport [^int d ^int jid])
+  (removeDependent [^int d ^int jid])
+  (^int depthOf [^int d])
+  (setDepth [^int d ^int depth])
+  (dropNode [^int d])
+  (^long consequenceOf [^int jid])
+  (^int informantOf [^int jid])
+  (^ints antecedentsOf [^int jid])
+  (putJustification [^int jid ^int consequence ^int informant ^ints antecedents])
+  (dropJustification [^int jid]))
+
+(def ^:private ^ints no-ids (int-array 0))
+
+(defn- posting-ints ^ints [^Int2ObjectOpenHashMap m d]
   (if-let [p (.get m (int d))] (dense/pints p) (int-array 0)))
 
-(defn- adj-set
-  "The justification ids at `d` as a Clojure set — empty for an unknown or unusable
-  datum, so the read is as total as the reference's `get-in … #{}`."
-  [^Int2ObjectOpenHashMap m d]
-  (if-let [p (when (integer? d) (.get m (int d)))] (dense/pmembers p) #{}))
-
-(defn- adj-add! [^Int2ObjectOpenHashMap m d jid]
+(defn- posting-add! [^Int2ObjectOpenHashMap m d jid]
   (let [k (int d)
         p (or (.get m k) (let [fresh (dense/int-postings)] (.put m k fresh) fresh))]
     (dense/padd! p jid)
     nil))
 
-(defn- adj-rem! [^Int2ObjectOpenHashMap m d jid]
+(defn- posting-rem! [^Int2ObjectOpenHashMap m d jid]
   (when-let [p (.get m (int d))]
     (dense/prem! p jid)
-    ;; empty == absent, so a torn-down node leaves no husk behind
     (when (zero? (long (dense/pcard p))) (.remove m (int d))))
   nil)
+
+(deftype HeapColumns [^Int2IntOpenHashMap depths
+                      ^Int2ObjectOpenHashMap supports
+                      ^Int2ObjectOpenHashMap conseqs
+                      ^Int2IntOpenHashMap j-conseq
+                      ^Int2IntOpenHashMap j-inf
+                      ^Int2ObjectOpenHashMap j-antes]
+  TmsColumns
+  (supportsOf [_ d] (posting-ints supports d))
+  (dependentsOf [_ d] (posting-ints conseqs d))
+  (addSupport [_ d jid] (posting-add! supports d jid))
+  (addDependent [_ d jid] (posting-add! conseqs d jid))
+  (removeSupport [_ d jid] (posting-rem! supports d jid))
+  (removeDependent [_ d jid] (posting-rem! conseqs d jid))
+  (depthOf [_ d] (.get depths d))
+  (setDepth [_ d depth] (.put depths d depth) nil)
+  (dropNode [_ d] (.remove depths d) (.remove supports d) (.remove conseqs d) nil)
+  (consequenceOf [_ jid] (if (.containsKey j-conseq jid) (long (.get j-conseq jid)) -1))
+  (informantOf [_ jid] (.get j-inf jid))
+  (antecedentsOf [_ jid] (or (.get j-antes jid) no-ids))
+  (putJustification [_ jid consequence informant antecedents]
+    (.put j-conseq jid consequence)
+    (.put j-inf jid informant)
+    (.put j-antes jid antecedents)
+    nil)
+  (dropJustification [_ jid]
+    (.remove j-conseq jid) (.remove j-inf jid) (.remove j-antes jid) nil))
+
+(defn- heap-columns
+  "Empty `HeapColumns`.  The informant column answers an absent id with `no-informant`,
+  never with handle 0."
+  ^HeapColumns []
+  (->HeapColumns (Int2IntOpenHashMap.) (Int2ObjectOpenHashMap.) (Int2ObjectOpenHashMap.)
+                 (Int2IntOpenHashMap.)
+                 (doto (Int2IntOpenHashMap.) (.defaultReturnValue (int no-informant)))
+                 (Int2ObjectOpenHashMap.)))
+
+(defn- ints-set
+  "An ascending `int[]` of ids as a Clojure set of Longs, the engine's handle type."
+  [^ints a]
+  (loop [i 0, s (transient #{})]
+    (if (< i (alength a)) (recur (inc i) (conj! s (long (aget a i)))) (persistent! s))))
+
+(defn- supports-set
+  "The justification ids concluding `d`, as a set — empty for an unknown datum and for
+  anything that cannot name one, nil included, as the reference's `get-in … #{}` is."
+  [^TmsColumns cols d]
+  (if (integer? d) (ints-set (.supportsOf cols (int d))) #{}))
+
+(defn- dependents-set
+  "The justification ids citing `d`, as a set — total, as `supports-set` is."
+  [^TmsColumns cols d]
+  (if (integer? d) (ints-set (.dependentsOf cols (int d))) #{}))
 
 ;; ---- reader/writer coordination -----------------------------------------
 ;;
@@ -231,16 +314,12 @@
                    ^RoaringBitmap nodes
                    ^RoaringBitmap premises
                    ^RoaringBitmap mono-premises
-                   ^Int2IntOpenHashMap depths
-                   ^Int2ObjectOpenHashMap supports
-                   ^Int2ObjectOpenHashMap conseqs
-                   ;; the justification columns — see the block above
+                   ;; depth, adjacency, and the consequence / informant / antecedent
+                   ;; columns — see `TmsColumns`
+                   ^TmsColumns cols
+                   ;; the live ids, and the two sparse or two-class columns
                    ^RoaringBitmap jids
-                   ^Int2IntOpenHashMap j-conseq
-                   ^Int2IntOpenHashMap j-inf
                    ^Int2ObjectOpenHashMap j-inf-sym
-                   ^Int2ObjectOpenHashMap j-antes
-                   ^Int2ObjectOpenHashMap j-outs
                    ^RoaringBitmap j-mono
                    ^RoaringBitmap in
                    ^RoaringBitmap groundable
@@ -278,7 +357,7 @@
                        (not (.hasNext it))               false
                        (contains? sup (long (.next it))) (recur)
                        :else                             true))))))))
-  (-depth [_ datum] (opt-read lock (if (integer? datum) (long (.get depths (int datum))) 0)))
+  (-depth [_ datum] (opt-read lock (if (integer? datum) (long (.depthOf cols (int datum))) 0)))
   (-premise? [_ datum] (opt-read lock (rb-has? premises datum)))
   (-premise-strength [_ datum]
     (opt-read lock
@@ -297,8 +376,8 @@
   (-touched-new [_] (with-read lock (rb-set touched-new)))
   (-reset-touched [_]
     (with-write lock (.clear touched) (.clear touched-in) (.clear touched-new)) nil)
-  (-supports [_ datum] (with-read lock (adj-set supports datum)))
-  (-dependents [_ datum] (with-read lock (adj-set conseqs datum)))
+  (-supports [_ datum] (with-read lock (supports-set cols datum)))
+  (-dependents [_ datum] (with-read lock (dependents-set cols datum)))
   (-justification [this jid] (with-read lock (when (rb-has? jids jid) (just-record this jid))))
   (-justifications [this] (with-read lock (seq (mapv #(just-record this %) (rb-longs jids)))))
   (-ensure-node [this datum depth]
@@ -329,28 +408,31 @@
 
 ;; ---- reading a justification out of the columns --------------------------
 
-(def ^:private ^ints no-ids (int-array 0))
-
 (defn- j-antecedents ^ints [^DenseTms this jid]
-  (or (.get ^Int2ObjectOpenHashMap (.-j-antes this) (int jid)) no-ids))
-
-(defn- j-out ^ints [^DenseTms this jid]
-  (or (.get ^Int2ObjectOpenHashMap (.-j-outs this) (int jid)) no-ids))
+  (.antecedentsOf ^TmsColumns (.-cols this) (int jid)))
 
 (defn- j-consequence
   "The consequence handle, or -1 for a justification that is not stored — the callers
   are walks over adjacency, which can name an id whose justification has been swept."
   ^long [^DenseTms this jid]
-  (let [m ^Int2IntOpenHashMap (.-j-conseq this)
-        k (int jid)]
-    (if (.containsKey m k) (long (.get m k)) -1)))
+  (.consequenceOf ^TmsColumns (.-cols this) (int jid)))
 
 (defn- j-informant-int
   "The informant as an int when it is a handle, else the absent marker — what
   `conferred-class` compares antecedents against, so a symbolic informant simply
   matches nothing."
   ^long [^DenseTms this jid]
-  (long (.get ^Int2IntOpenHashMap (.-j-inf this) (int jid))))
+  (long (.informantOf ^TmsColumns (.-cols this) (int jid))))
+
+(defn- supports-of
+  "The ids of the justifications concluding `d`, as a fresh `int[]`."
+  ^ints [^DenseTms this d]
+  (.supportsOf ^TmsColumns (.-cols this) (int d)))
+
+(defn- dependents-of
+  "The ids of the justifications citing `d`, as a fresh `int[]`."
+  ^ints [^DenseTms this d]
+  (.dependentsOf ^TmsColumns (.-cols this) (int d)))
 
 (defn- j-informant [^DenseTms this jid]
   (let [i (j-informant-int this jid)]
@@ -363,16 +445,13 @@
   keeps the graph and the record store keeps the record (`jtms/graph-just`).  Nothing
   on a relabel path calls this — the fixpoints read the columns directly."
   [^DenseTms this jid]
-  (let [antes (j-antecedents this jid)
-        out   (j-out this jid)]
-    (jtms/->Justification
-     (long jid)
-     (j-informant this jid)
-     (into [] (map long) antes)
-     (j-consequence this jid)
-     nil
-     (if (rb-has? ^RoaringBitmap (.-j-mono this) jid) :monotonic :default)
-     (into #{} (map long) out))))
+  (jtms/->Justification
+   (long jid)
+   (j-informant this jid)
+   (into [] (map long) (j-antecedents this jid))
+   (j-consequence this jid)
+   nil
+   (if (rb-has? ^RoaringBitmap (.-j-mono this) jid) :monotonic :default)))
 
 ;; ---- validity and class, against the dense structures -------------------
 ;;
@@ -390,33 +469,23 @@
             (.contains in (aget ids i)) (recur (unchecked-inc i))
             :else false))))
 
-(defn- none-in? [^ints ids ^RoaringBitmap in]
-  (let [n (alength ids)]
-    (loop [i 0]
-      (cond (== i n) true
-            (.contains in (aget ids i)) false
-            :else (recur (unchecked-inc i))))))
-
 (defn- valid?
-  "Is justification `jid` satisfied — every antecedent believed, no negation-as-failure
-  antecedent believed, and not blocked by its rule's exception?"
+  "Is justification `jid` satisfied — every antecedent believed, its rule believed when
+  the informant is a rule handle, and not blocked by its rule's exception?"
   [^DenseTms this jid ^RoaringBitmap in ^RoaringBitmap blocked]
   (and (not (.contains blocked (int jid)))
        (all-in? (j-antecedents this jid) in)
-       (none-in? (j-out this jid) in)))
+       (let [i (j-informant-int this jid)]
+         (or (== i no-informant) (.contains in (int i))))))
 
 (defn- conferred-class
   "The class a valid justification confers: its own strength, capped by the weakest of
-  its antecedents' classes — the informant excluded, since a rule is an antecedent for
-  *validity*, not as a ground."
+  its antecedents' classes.  A rule-handle informant is not in `j-antes`, so the cap
+  never reads it: a rule is a condition of *validity*, not a ground."
   [^DenseTms this jid ^RoaringBitmap classes]
-  (let [informant (j-informant-int this jid)
-        antes     (j-antecedents this jid)]
+  (let [antes (j-antecedents this jid)]
     (areduce antes i acc (if (rb-has? ^RoaringBitmap (.-j-mono this) jid) :monotonic :default)
-             (let [a (aget antes i)]
-               (if (== a informant)
-                 acc
-                 (strength/min acc (if (.contains classes a) :monotonic :default)))))))
+             (strength/min acc (if (.contains classes (aget antes i)) :monotonic :default)))))
 
 (defn- node-class
   "The strongest support an IN datum has: its premise strength, and what each currently
@@ -428,7 +497,7 @@
         prem    (when (and (rb-has? ^RoaringBitmap (.-premises this) d)
                            (not (rb-has? ^RoaringBitmap (.-defeated this) d)))
                   (if (rb-has? ^RoaringBitmap (.-mono-premises this) d) :monotonic :default))
-        ids     (adj-ints (.-supports this) d)]
+        ids     (supports-of this d)]
     (areduce ids i acc (or prem :default)
              (let [jid (aget ids i)]
                (if (and (.contains live jid) (valid? this jid in blocked))
@@ -441,15 +510,14 @@
   "Every node whose label could move when `seeds` do: the forward closure over
   consequence justifications, seeds included."
   ^RoaringBitmap [^DenseTms this seeds]
-  (let [seen (rb)
-        cons ^Int2ObjectOpenHashMap (.-conseqs this)]
+  (let [seen (rb)]
     (loop [stack (vec seeds)]
       (when (seq stack)
         (let [d (peek stack), stack (pop stack)]
           (if (rb-has? seen d)
             (recur stack)
             (do (rb-add! seen d)
-                (let [ids (adj-ints cons d)]
+                (let [ids (dependents-of this d)]
                   (recur (areduce ids i acc stack
                                   (let [c (j-consequence this (aget ids i))]
                                     (if (neg? c) acc (conj acc c)))))))))))
@@ -475,8 +543,7 @@
   million premises where the reference representation stayed flat."
   [^DenseTms this ^RoaringBitmap region cands ^RoaringBitmap acc
    ^RoaringBitmap forced-out]
-  (let [blocked ^RoaringBitmap (.-blocked this)
-        cons    ^Int2ObjectOpenHashMap (.-conseqs this)]
+  (let [blocked ^RoaringBitmap (.-blocked this)]
     ;; seed: the region's own premises, unless forced OUT
     (let [it (.getIntIterator (RoaringBitmap/and region ^RoaringBitmap (.-premises this)))]
       (while (.hasNext it)
@@ -494,7 +561,7 @@
                    (not (rb-has? forced-out c))
                    (valid? this jid acc blocked))
             (do (rb-add! acc c)
-                (let [ids (adj-ints cons c)]
+                (let [ids (dependents-of this c)]
                   (recur (areduce ids i a stack (conj a (aget ids i))))))
             (recur stack)))))))
 
@@ -511,8 +578,7 @@
   The bitmap *is* the whole class map: the lattice has two elements.  A boundary node
   whose class could move would have an antecedent in the region and so would be in it."
   [^DenseTms this ^RoaringBitmap region ^RoaringBitmap in ^RoaringBitmap classes]
-  (let [cons    ^Int2ObjectOpenHashMap (.-conseqs this)
-        members (RoaringBitmap/and region in)]
+  (let [members (RoaringBitmap/and region in)]
     ;; The lattice has height one, so a member rises at most once and the worklist only
     ;; ever ADDS — which is exactly what makes this the least fixpoint rather than some
     ;; fixpoint.
@@ -525,7 +591,7 @@
                   (not= :monotonic (node-class this d in classes)))
             (recur stack)
             (do (rb-add! classes d)
-                (let [ids (adj-ints cons d)]
+                (let [ids (dependents-of this d)]
                   (recur (areduce ids i acc stack
                                   (let [c (j-consequence this (aget ids i))]
                                     (if (and (not (neg? c)) (rb-has? in c))
@@ -539,13 +605,12 @@
   graph."
   [^DenseTms this ^RoaringBitmap region]
   (let [live    ^RoaringBitmap (.-jids this)
-        sup     ^Int2ObjectOpenHashMap (.-supports this)
         ;; only the justifications that can conclude something in the region matter
         cands   (let [it (.getIntIterator region)]
                   (loop [acc (transient [])]
                     (if-not (.hasNext it)
                       (persistent! acc)
-                      (let [ids (adj-ints sup (.next it))]
+                      (let [ids (supports-of this (.next it))]
                         (recur (areduce ids i a acc
                                         (if (.contains live (aget ids i))
                                           (conj! a (aget ids i))
@@ -618,18 +683,18 @@
   (and (integer? datum)
        (<= (long datum) max-handle)
        (rb-has? ^RoaringBitmap (.-nodes this) datum)
-       (<= (long (.get ^Int2IntOpenHashMap (.-depths this) (int datum))) (long depth))))
+       (<= (long (.depthOf ^TmsColumns (.-cols this) (int datum))) (long depth))))
 
 (defn- ensure! [^DenseTms this datum depth]
-  (let [d      (int (check-handle! datum "node handle"))
-        depths ^Int2IntOpenHashMap (.-depths this)]
+  (let [d    (int (check-handle! datum "node handle"))
+        cols ^TmsColumns (.-cols this)]
     (if (rb-has? ^RoaringBitmap (.-nodes this) d)
-      (.put depths d (int (min (.get depths d) (int depth))))
+      (.setDepth cols d (int (min (.depthOf cols d) (int depth))))
       ;; the window's record of what it created, taken here because this is the only
       ;; line that knows — see `jtms/touched-new`
       (do (rb-add! ^RoaringBitmap (.-nodes this) d)
           (rb-add! ^RoaringBitmap (.-touched-new this) d)
-          (.put depths d (int depth))))
+          (.setDepth cols d (int depth))))
     nil))
 
 (defn- premise! [^DenseTms this datum strength-kw]
@@ -661,36 +726,32 @@
   no consequences yet, so its region is a singleton), and every later re-derivation by
   another path is a no-op.  Any real change still takes the full resettle."
   [^DenseTms this just]
-  (let [{:keys [id informant antecedents consequence out strength]} (jtms/graph-just just)
+  (let [{:keys [id informant antecedents consequence strength]} (jtms/graph-just just)
         jid   (int (check-handle! id "justification id"))
+        cols  ^TmsColumns (.-cols this)
         in    ^RoaringBitmap (.-in this)
         mono  ^RoaringBitmap (.-mono this)]
     ;; The columns, in place of a stored object.  Every one is **set**, never merged:
-    ;; where a map entry would have been replaced wholesale, seven columns each have to
-    ;; be told, and a column left alone on a re-add would answer for the justification
-    ;; the id used to name.
+    ;; where a map entry would have been replaced wholesale, six columns each have to
+    ;; be told, and a column left alone on a re-add would answer for a swept
+    ;; justification that held the same id.
     (rb-add! ^RoaringBitmap (.-jids this) jid)
-    (.put ^Int2IntOpenHashMap (.-j-conseq this) jid (int consequence))
+    (.putJustification cols jid (int consequence)
+                       (int (if (integer? informant) informant no-informant))
+                       (int-array antecedents))
     (if (integer? informant)
-      (do (.put ^Int2IntOpenHashMap (.-j-inf this) jid (int informant))
-          (.remove ^Int2ObjectOpenHashMap (.-j-inf-sym this) jid))
-      (do (.put ^Int2IntOpenHashMap (.-j-inf this) jid (int no-informant))
-          (.put ^Int2ObjectOpenHashMap (.-j-inf-sym this) jid informant)))
-    (.put ^Int2ObjectOpenHashMap (.-j-antes this) jid (int-array antecedents))
-    (if (seq out)
-      (.put ^Int2ObjectOpenHashMap (.-j-outs this) jid (int-array out))
-      (.remove ^Int2ObjectOpenHashMap (.-j-outs this) jid))
+      (.remove ^Int2ObjectOpenHashMap (.-j-inf-sym this) jid)
+      (.put ^Int2ObjectOpenHashMap (.-j-inf-sym this) jid informant))
     (if (= :monotonic strength)
       (rb-add! ^RoaringBitmap (.-j-mono this) jid)
       (rb-del! ^RoaringBitmap (.-j-mono this) jid))
-    (adj-add! (.-supports this) consequence id)
-    ;; Two straight walks, not `doseq` over `(concat antecedents out)`: the lazy seq was
-    ;; allocated once per justification — the hottest write path there is, one per derived
-    ;; fact — to express nothing but "iterate both".  `run!` reduces each collection in
-    ;; place, with no cons cells and no chunk buffer.
-    (let [cs (.-conseqs this)]
-      (run! (fn [a] (adj-add! cs a id)) antecedents)
-      (when (seq out) (run! (fn [a] (adj-add! cs a id)) out)))
+    (.addSupport cols (int consequence) jid)
+    ;; The adjacency lists the justification under each antecedent and under its rule —
+    ;; one `run!` over the antecedents, reduced in place with no cons cells, and one entry
+    ;; for a rule informant.  This is the hottest write path there is, one per derived
+    ;; fact, so nothing here allocates a seq to iterate both.
+    (run! (fn [a] (.addDependent ^TmsColumns cols (int a) jid)) antecedents)
+    (when (integer? informant) (.addDependent cols (int informant) jid))
     (if (and (rb-has? in consequence)
              (or (not (valid? this jid in ^RoaringBitmap (.-blocked this)))
                  (let [cls (if (rb-has? mono consequence) :monotonic :default)]
@@ -708,21 +769,21 @@
 (defn- restrength-informant!
   "The dense half of `jtms/restrength-informant`: the rule-contribution slot is the
   `j-mono` bitmap, the candidate justifications are the informant's own `conseqs`
-  adjacency (a firing conjoins the rule handle as an antecedent), and the informant
+  adjacency (`add-just!` lists a justification under its rule's node), and the informant
   column filters out a justification that merely uses the handle as an ordinary
   antecedent.  Only a bit that actually moves seeds the relabel."
   [^DenseTms this informant strength]
   (when (integer? informant)
     (let [inf   (int informant)
-          jinf  ^Int2IntOpenHashMap (.-j-inf this)
           jmono ^RoaringBitmap (.-j-mono this)
           mono? (= :monotonic strength)
-          ids   (adj-ints (.-conseqs this) inf)
+          ids   (dependents-of this inf)
           n     (alength ids)]
       (loop [i 0, seeds (transient [])]
         (if (< i n)
           (let [jid (aget ids i)]
-            (if (and (.containsKey jinf jid) (== (.get jinf jid) inf)
+            ;; an absent id reads `no-informant`, which no handle equals
+            (if (and (== (j-informant-int this jid) inf)
                      (not= mono? (rb-has? jmono jid)))
               (do (if mono? (rb-add! jmono jid) (rb-del! jmono jid))
                   (let [c (j-consequence this jid)]
@@ -793,12 +854,12 @@
   (let [ground ^RoaringBitmap (.-groundable this)
         prem   ^RoaringBitmap (.-premises this)
         live   ^RoaringBitmap (.-jids this)
-        sup    ^Int2ObjectOpenHashMap (.-supports this)
-        cons   ^Int2ObjectOpenHashMap (.-conseqs this)
+        cols   ^TmsColumns (.-cols this)
         dead   (into [] (remove #(or (rb-has? prem %) (rb-has? ground %)))
                      (rb-longs suspects))
         dead-jids (into #{}
-                        (comp (mapcat (fn [d] (concat (adj-set sup d) (adj-set cons d))))
+                        (comp (mapcat (fn [d] (concat (supports-set cols d)
+                                                      (dependents-set cols d))))
                               (filter #(.contains live (int %))))
                         dead)
         ;; read the informants BEFORE the columns are unlinked — a premise
@@ -806,19 +867,16 @@
         removed-justs (into [] (remove #(= :premise (j-informant this %))) dead-jids)]
     (doseq [jid dead-jids]
       (let [antes (j-antecedents this jid)
-            outs  (j-out this jid)
+            inf   (j-informant-int this jid)
             c     (j-consequence this jid)
             k     (int jid)]
         (rb-del! live k)
-        (.remove ^Int2IntOpenHashMap (.-j-conseq this) k)
-        (.remove ^Int2IntOpenHashMap (.-j-inf this) k)
+        (.dropJustification cols k)
         (.remove ^Int2ObjectOpenHashMap (.-j-inf-sym this) k)
-        (.remove ^Int2ObjectOpenHashMap (.-j-antes this) k)
-        (.remove ^Int2ObjectOpenHashMap (.-j-outs this) k)
         (rb-del! ^RoaringBitmap (.-j-mono this) k)
-        (adj-rem! sup c jid)
-        (dotimes [i (alength antes)] (adj-rem! cons (aget antes i) jid))
-        (dotimes [i (alength outs)] (adj-rem! cons (aget outs i) jid))))
+        (.removeSupport cols (int c) k)
+        (dotimes [i (alength antes)] (.removeDependent cols (aget antes i) k))
+        (when-not (== inf no-informant) (.removeDependent cols (int inf) k))))
     (doseq [d dead]
       (rb-del! ^RoaringBitmap (.-nodes this) d)
       (rb-del! ^RoaringBitmap (.-premises this) d)
@@ -828,9 +886,7 @@
       ;; survivor's label — only the bookkeeping needs the removal
       (rb-del! ^RoaringBitmap (.-in this) d)
       (rb-del! ^RoaringBitmap (.-groundable this) d)
-      (.remove ^Int2IntOpenHashMap (.-depths this) (int d))
-      (.remove sup (int d))
-      (.remove cons (int d)))
+      (.dropNode cols (int d)))
     ;; a block names a justification and a supersession names a datum, so a swept one
     ;; must lose both — an entry left behind would be reapplied to whatever reuses the id
     (doseq [jid dead-jids] (rb-del! ^RoaringBitmap (.-blocked this) jid))
@@ -859,6 +915,198 @@
 (defn- sweep-from! [^DenseTms this seeds]
   (sweep! this (affected-region this seeds)))
 
+;; ---- the byte image -------------------------------------------------------
+;;
+;; The whole network as bytes, written between operations and read back into an empty
+;; network with no relabel: every label, class, block, defeat and supersession is read,
+;; not recomputed.  `vaelii.impl.belief-image` is the caller, and decides whether an
+;; image may be installed at all; this section only writes and reads one.
+;;
+;; The touched window is not written.  An image is taken between operations, and a
+;; reloaded network starts its window empty, as a freshly settled one does.  Keys are
+;; written in sorted order, so two images of equal networks are equal bytes.  A zero depth
+;; is not written: `depths` answers an absent key as 0.
+
+(def image-version
+  "The byte image's layout number.  `read-image!` refuses any other, so an image written
+  under an earlier set of justification columns is discarded rather than misread."
+  2)
+
+(def ^:private ^:const image-magic 0x76544D53)
+
+(defn- image-bitmaps
+  "The bitmaps an image carries, in the order it writes them."
+  [^DenseTms t]
+  [(.-nodes t) (.-premises t) (.-mono-premises t) (.-jids t) (.-j-mono t)
+   (.-in t) (.-groundable t) (.-defeated t) (.-blocked t) (.-mono t)])
+
+(defn- sorted-keys ^ints [m]
+  (let [^ints a (if (instance? Int2IntOpenHashMap m)
+                  (.toIntArray (.keySet ^Int2IntOpenHashMap m))
+                  (.toIntArray (.keySet ^Int2ObjectOpenHashMap m)))]
+    (Arrays/sort a)
+    a))
+
+(defn- write-bitmap! [^DataOutput o ^RoaringBitmap r]
+  ;; a clone, because `runOptimize` rewrites containers and the writer holds only a read
+  ;; stamp over the live one
+  (let [c (.clone r)] (.runOptimize c) (.serialize c o)))
+
+(defn- write-ints! [^DataOutput o ^ints a]
+  (.writeInt o (alength a))
+  (dotimes [k (alength a)] (.writeInt o (aget a k))))
+
+(defn- read-ints ^ints [^DataInput i]
+  (let [n (.readInt i) a (int-array n)]
+    (dotimes [k n] (aset a k (.readInt i)))
+    a))
+
+(defn- write-int-map! [^DataOutput o ^Int2IntOpenHashMap m skip-zero?]
+  (let [ks (sorted-keys m)
+        n  (loop [k 0 c 0]
+             (if (== k (alength ks))
+               c
+               (recur (inc k) (if (and skip-zero? (zero? (.get m (aget ks k)))) c (inc c)))))]
+    (.writeInt o (int n))
+    (dotimes [k (alength ks)]
+      (let [key (aget ks k) v (.get m key)]
+        (when-not (and skip-zero? (zero? v))
+          (.writeInt o key)
+          (.writeInt o v))))))
+
+(defn- read-int-map! [^DataInput i ^Int2IntOpenHashMap m]
+  (dotimes [_ (.readInt i)] (.put m (.readInt i) (.readInt i))))
+
+(defn- write-postings! [^DataOutput o ^Int2ObjectOpenHashMap m]
+  (let [ks (sorted-keys m)]
+    (.writeInt o (alength ks))
+    (dotimes [k (alength ks)]
+      (let [key (aget ks k)
+            s   (dense/pseed (.get m key))]
+        (.writeInt o key)
+        (if (instance? RoaringBitmap s)
+          (do (.writeByte o 1) (write-bitmap! o s))
+          (do (.writeByte o 0) (write-ints! o s)))))))
+
+(defn- read-postings!
+  "Each posting comes back in the form it was written in — a sorted `int[]`, or a bitmap
+  once it had grown past `IntPostings`' promotion bound — so the reloaded network promotes
+  on the same later insert the original would have."
+  [^DataInput i ^Int2ObjectOpenHashMap m]
+  (dotimes [_ (.readInt i)]
+    (let [key (.readInt i)]
+      (.put m key (if (== 1 (.readByte i))
+                    (dense/->IntPostings nil (doto (RoaringBitmap.) (.deserialize i)))
+                    (dense/->IntPostings (read-ints i) nil))))))
+
+(defn- write-arrays! [^DataOutput o ^Int2ObjectOpenHashMap m]
+  (let [ks (sorted-keys m)]
+    (.writeInt o (alength ks))
+    (dotimes [k (alength ks)]
+      (let [key (aget ks k)]
+        (.writeInt o key)
+        (write-ints! o (.get m key))))))
+
+(defn- read-arrays! [^DataInput i ^Int2ObjectOpenHashMap m]
+  (dotimes [_ (.readInt i)] (let [key (.readInt i)] (.put m key (read-ints i)))))
+
+(defn- write-data! [^DataOutput o x]
+  (let [^bytes b (nippy/freeze x)]
+    (.writeInt o (alength b))
+    (.write o b)))
+
+(defn- read-data [^DataInput i]
+  (let [b (byte-array (.readInt i))]
+    (.readFully i b)
+    (nippy/thaw b)))
+
+(defn- heap-cols
+  "`t`'s columns as `HeapColumns`, which are the only columns the byte image writes and
+  reads.  Throws `IllegalStateException` for any other implementation."
+  ^HeapColumns [^DenseTms t]
+  (let [c (.-cols t)]
+    (if (instance? HeapColumns c)
+      c
+      (throw (IllegalStateException. "the byte image writes and reads HeapColumns only")))))
+
+(defn write-image
+  "Write the whole of dense network `t` to `o`, under a read stamp, so a concurrent reader
+  is not held up and a writer waits for the image to finish."
+  [^DenseTms t ^DataOutput o]
+  (with-read (.-lock t)
+    (.writeInt o image-magic)
+    (.writeInt o (int image-version))
+    (run! #(write-bitmap! o %) (image-bitmaps t))
+    (let [c (heap-cols t)]
+      (write-int-map! o (.-depths c) true)
+      (write-int-map! o (.-j-conseq c) false)
+      (write-int-map! o (.-j-inf c) false)
+      (write-postings! o (.-supports c))
+      (write-postings! o (.-conseqs c))
+      (write-arrays! o (.-j-antes c)))
+    (write-data! o (let [m ^Int2ObjectOpenHashMap (.-j-inf-sym t)]
+                     (mapv (fn [k] [k (.get m (int k))]) (sorted-keys m))))
+    (write-data! o (into (sorted-map) @(.-superseded t))))
+  nil)
+
+(defn read-image!
+  "Read an image `write-image` wrote from `i` into dense network `t`, which must hold no
+  node.  Throws `IllegalStateException` for a populated `t` and
+  `IllegalArgumentException` for bytes that are not an image of `image-version`; both are
+  a caller's error rather than a state of the KB, since `vaelii.impl.belief-image` checks
+  the manifest before it reads a byte."
+  [^DenseTms t ^DataInput i]
+  (with-write (.-lock t)
+    (when-not (.isEmpty ^RoaringBitmap (.-nodes t))
+      (throw (IllegalStateException. "read-image! needs an empty network")))
+    (let [magic (.readInt i) version (.readInt i)]
+      (when-not (and (== magic image-magic) (== version (long image-version)))
+        (throw (IllegalArgumentException.
+                (str "not a dense network image of version " image-version)))))
+    (run! (fn [^RoaringBitmap r] (.deserialize r i)) (image-bitmaps t))
+    (let [c (heap-cols t)]
+      (read-int-map! i (.-depths c))
+      (read-int-map! i (.-j-conseq c))
+      (read-int-map! i (.-j-inf c))
+      (read-postings! i (.-supports c))
+      (read-postings! i (.-conseqs c))
+      (read-arrays! i (.-j-antes c)))
+    (let [m ^Int2ObjectOpenHashMap (.-j-inf-sym t)]
+      (doseq [[k v] (read-data i)] (.put m (int k) v)))
+    (reset! (.-superseded t) (into {} (read-data i))))
+  t)
+
+(defn node-count
+  "How many nodes dense network `t` holds — the bitmap's cardinality, read under a read
+  stamp without materializing a handle."
+  ^long [^DenseTms t]
+  (with-read (.-lock t) (.getLongCardinality ^RoaringBitmap (.-nodes t))))
+
+(defn copy-into!
+  "Copy every structure of dense network `src` into `target`, which must hold no node,
+  under `target`'s write stamp.  `read-image!` reads into a fresh network and this moves
+  the result into the one a KB already holds: the KB holds its network by identity, so an
+  image cannot replace the object, and reading into a scratch network first means a
+  truncated image leaves the KB's network untouched."
+  [^DenseTms target ^DenseTms src]
+  (with-write (.-lock target)
+    (when-not (.isEmpty ^RoaringBitmap (.-nodes target))
+      (throw (IllegalStateException. "copy-into! needs an empty network")))
+    (run! (fn [[^RoaringBitmap t ^RoaringBitmap s]] (.or t s))
+          (map vector (image-bitmaps target) (image-bitmaps src)))
+    (let [tc (heap-cols target)
+          sc (heap-cols src)]
+      (.putAll ^Int2IntOpenHashMap (.-depths tc) ^Int2IntOpenHashMap (.-depths sc))
+      (.putAll ^Int2IntOpenHashMap (.-j-conseq tc) ^Int2IntOpenHashMap (.-j-conseq sc))
+      (.putAll ^Int2IntOpenHashMap (.-j-inf tc) ^Int2IntOpenHashMap (.-j-inf sc))
+      (doseq [[^Int2ObjectOpenHashMap t ^Int2ObjectOpenHashMap s]
+              [[(.-supports tc) (.-supports sc)] [(.-conseqs tc) (.-conseqs sc)]
+               [(.-j-antes tc) (.-j-antes sc)]
+               [(.-j-inf-sym target) (.-j-inf-sym src)]]]
+        (.putAll t s)))
+    (reset! (.-superseded target) @(.-superseded src)))
+  target)
+
 ;; ---- the canonical snapshot ---------------------------------------------
 
 (defn- snapshot
@@ -868,14 +1116,14 @@
   [^DenseTms this]
   (let [prem   ^RoaringBitmap (.-premises this)
         mprem  ^RoaringBitmap (.-mono-premises this)
-        depths ^Int2IntOpenHashMap (.-depths this)]
+        cols   ^TmsColumns (.-cols this)]
     {:nodes (into {}
                   (map (fn [d]
                          [d (cond-> {:datum d
                                      :premise? (rb-has? prem d)
-                                     :depth (long (.get depths (int d)))
-                                     :supports (adj-set (.-supports this) d)
-                                     :consequences (adj-set (.-conseqs this) d)}
+                                     :depth (long (.depthOf cols (int d)))
+                                     :supports (supports-set cols d)
+                                     :consequences (dependents-set cols d)}
                               (rb-has? prem d)
                               (assoc :premise-strength
                                      (if (rb-has? mprem d) :monotonic :default)))]))
@@ -901,13 +1149,9 @@
   []
   (->DenseTms (StampedLock.)
               (rb) (rb) (rb)                                   ; nodes premises mono-premises
-              (Int2IntOpenHashMap.)                            ; depths
-              (Int2ObjectOpenHashMap.) (Int2ObjectOpenHashMap.) ; supports conseqs
+              (heap-columns)                                   ; cols
               (rb)                                             ; jids
-              (Int2IntOpenHashMap.)                            ; j-conseq
-              ;; an absent informant is indistinguishable from the marker, never as handle 0
-              (doto (Int2IntOpenHashMap.) (.defaultReturnValue no-informant))
-              (Int2ObjectOpenHashMap.) (Int2ObjectOpenHashMap.) (Int2ObjectOpenHashMap.)
+              (Int2ObjectOpenHashMap.)                         ; j-inf-sym
               (rb)                                             ; j-mono
               (rb) (rb) (rb) (rb) (rb) (rb) (rb) (rb)          ; in groundable defeated blocked
                                                                ; touched touched-in touched-new

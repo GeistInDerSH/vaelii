@@ -86,8 +86,9 @@ leaves it dormant, an unreachable target convicts. See [argtypes.md](argtypes.md
 specializations. `arity` states one exact relation arity and derives its exact
 class, which derives the arity back; `arityMin` states a variable relation's lower bound.
 `at_least_binary_relation` / `at_least_ternary_relation` are derived minimum classes.
-`admitsArgnum` names whether one positive position exists; no WFF/query reader currently
-consumes it. See [taxonomy.md](taxonomy.md#relations-and-arity-policy).
+`admitsArgnum` names whether one positive position exists; `AdmitsArgnumProver` answers
+`(admitsArgnum P n)` as a computed query, from a relation's `arity` and `variable_arity`
+mark rather than a stored fact. See [taxonomy.md](taxonomy.md#relations-and-arity-policy).
 
 **Arm** ![kb](../.github/badges/cat-kb.svg): The function a table stores under a functor
 and a walk over that table invokes at one fixed point — `special/arms` holds an
@@ -168,6 +169,13 @@ or **Derived**) and not defeated.
 **Belief (an agent's)** ![kb](../.github/badges/cat-kb.svg): A different question
 with the same word — `(believes Alice P)` proves `P` in Alice's own context and says
 nothing about whether the KB holds it. See [belief.md](belief.md).
+
+**Belief image** ![tms](../.github/badges/cat-tms.svg): The whole belief state a
+`:disk-snapshot` KB writes beside its records (`vaelii.impl.belief-image`): the dense
+network, the taxonomy, and the KB atoms recovery fills. The next open installs it in place
+of `recover` when its stamp — the records' fingerprint, the **source identity** and the
+belief policies — equals the KB's, and discards all of it otherwise. See
+[storage.md](storage.md#the-belief-image).
 
 **`bijection`** ![kb](../.github/badges/cat-kb.svg): `(bijection P)` — the strongest of
 the three **function marks**: `P` is single-valued, one-to-one, total on its declared
@@ -632,10 +640,10 @@ the machine-stratum representation of a member of it. See
 
 **LiteralSentex** ![kb](../.github/badges/cat-kb.svg): The sentex record for a
 literal — a fact or its negation, a metadata declaration, or a query pattern —
-holding only `[sentence context id polarity strength]`. Split from `RuleSentex` so a
+holding only `[sentence context id strength]`. Split from `RuleSentex` so a
 fact does not carry the rule-only slots. A *literal* is a signed predicate
-application (an atomic sentence or its negation); the record admits either polarity
-via its `polarity` slot, so the name is `Literal`, not `Atomic`. See
+application (an atomic sentence or its negation); the record admits either sign — a
+negative literal's sentence is `(not S)` — so the name is `Literal`, not `Atomic`. See
 [canonicalization.md](canonicalization.md).
 
 **Locality** ![tms](../.github/badges/cat-tms.svg): The JTMS invariant that no
@@ -695,12 +703,22 @@ sees both, a definitional clash, or the three claims an `anti_transitive` chain 
 Resolved softly by `settle` on defeat-class, the weakest member defeated where one is
 weakest, never thrown. See [nmtms.md](nmtms.md).
 
-**`not`** ![kb](../.github/badges/cat-kb.svg): First-class negation. A `(not S)`
-becomes `S` stored at `:polarity :negative`, double negation eliminated; a negative
-literal keeps its `not` in the index as polarity. See
+**`not`** ![kb](../.github/badges/cat-kb.svg): First-class negation. A `(not S)` is
+stored with its one head `not`, double negation eliminated, and that head is the
+literal's sign (`sentex/negative?`); the trie keys it under `:false`. See
 [canonicalization.md](canonicalization.md).
 
 ## O
+
+**Operation log** ![backend](../.github/badges/cat-backend.svg): The file a KB records
+each outermost public write into, as the call that made it — the operation's name, its
+arguments, and the clock, creator and dynamic bindings the call reads beyond them
+(`vaelii.impl.oplog`). A write nested inside another appends no frame. A seal-class or
+configuration call, an argument nippy cannot freeze, a change-feed listener's write, or a
+record write outside every operation marks the log unusable until the next **seal**. A
+restore replays the frames of the current generation over the images the seal wrote,
+checking each replayed write against the record stored at its handle. See
+[namespaces.md](namespaces.md).
 
 **`or`** ![kb](../.github/badges/cat-kb.svg): The disjunction connective, legal in a
 rule **antecedent** and nowhere else. It never reaches a stored sentence: the
@@ -920,10 +938,11 @@ keying rules by their antecedent *and* consequent predicates — both sets
 complete whatever the direction — so "what could conclude P?" is answerable
 without a scan. See [indexing.md](indexing.md).
 
-**RuleSentex** ![kb](../.github/badges/cat-kb.svg): The sentex record for a sentence
-that is an implication, adding the rule-only slots `[antecedent consequent varmap
-direction defeasible assumption constraint]`. Indexed additionally by
-antecedent/consequent predicates. See [inference.md](inference.md).
+**RuleSentex** ![kb](../.github/badges/cat-kb.svg): The sentex record for an
+implication: `[context id strength]` and the rule-only slots `[antecedent consequent
+varmap direction defeasible assumption constraint]`, and no `sentence` —
+`sentex/sentence-of` builds the `implies` form from the antecedent and consequent. Indexed
+additionally by antecedent/consequent predicates. See [inference.md](inference.md).
 
 ## S
 
@@ -937,6 +956,13 @@ holds sets. Found by backtracking search over the tightened network, and a
 function of the facts alone, so it is repeatable.
 `core/qualitative-scenario` / `qualitative-scenarios`. See
 [scenario.md](scenario.md).
+
+**Seal** ![backend](../.github/badges/cat-backend.svg): The point an **operation log**
+starts again from (`vaelii.impl.seal`): the index image and the belief image, written
+together, then a `seal.nippy` naming the new generation, the records watermark and the
+two fingerprints the images carry, then the log truncated to a header for that
+generation. A restore installs the images against the seal's fingerprints and replays
+only frames of its generation. See [namespaces.md](namespaces.md).
 
 **Secondary roots** ![backend](../.github/badges/cat-backend.svg): The three
 single-level index roots the trie's left-to-right narrowing cannot supply —
@@ -999,6 +1025,14 @@ addition table. See [sign.md](sign.md).
 a rule conclusion's existential variable with a term built from the variables
 the antecedent bound, so the same binding names the same witness twice and a
 re-derivation does not mint a second one. See [skolem.md](skolem.md).
+
+**Source identity** ![backend](../.github/badges/cat-backend.svg): The digest of
+the engine source that derives belief (`vaelii.impl.source-identity`). It covers the
+namespaces `recovery` and `vaelii.core` reach through `ns` requires, imports and quoted
+symbols, read as forms with comments, docstrings and reader positions removed, and the
+jar names of the libraries those namespaces load. A **belief image** is installed only
+by a build whose source identity equals the one the image was written under. See
+[storage.md](storage.md).
 
 **Spindle** ![kb](../.github/badges/cat-kb.svg): The shape the context topology
 is built from — three layers: a **head** every member sees, a set of **members**

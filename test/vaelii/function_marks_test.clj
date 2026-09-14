@@ -249,22 +249,27 @@
   ;; The arrival order the mark family gets wrong when a spelling reaches the sweep
   ;; through only some of its readers (#45): the pair is stored first and the
   ;; declaration second, so nothing refuses at the entry point and what has to convict
-  ;; is the retroactive pass. Every mark here is derived rather than written, so the pass
-  ;; runs against a conclusion of a rule.
+  ;; is the retroactive pass, which decides the pair under either constraint policy as a
+  ;; recover would. Every mark here is derived rather than written, so the pass runs
+  ;; against a conclusion of a rule.
   (tu/with-terms [pRel Ruritania]
     (v/assert kb (list pRel Ruritania 1980) U)
     (v/assert kb (list pRel Ruritania 1990) U)
     (v/assert kb (list 'bijection pRel) U)
-    (is (= [:functional] (mapv :violation (v/violations kb)))
-        "the stored pair sharing argument 1 is convicted by the derived (functional P)")))
+    (is (= [:functional] (mapv :kind (v/contradictions kb)))
+        "the stored pair sharing argument 1 is convicted by the derived (functional P) and weighed")
+    (is (empty? (filter #(= :functional (:violation %)) (v/violations kb)))
+        "decided, so not also filed as exposed")))
 
 (tu/deftest-kb a-late-bijection-convicts-a-stored-pair-sharing-argument-2
   (tu/with-terms [pRev Zenda]
     (v/assert kb (list pRev 7 Zenda) U)
     (v/assert kb (list pRev 8 Zenda) U)
     (v/assert kb (list 'bijection pRev) U)
-    (is (= [:functional] (mapv :violation (v/violations kb)))
-        "the mirrored conviction, by the derived (functionalInArg P 1)")))
+    (is (= [:functional] (mapv :kind (v/contradictions kb)))
+        "the mirrored conviction, by the derived (functionalInArg P 1), weighed")
+    (is (empty? (filter #(= :functional (:violation %)) (v/violations kb)))
+        "decided, so not also filed as exposed")))
 
 (tu/deftest-kb a-late-bijection-merges-two-mergeable-fillers-in-either-direction
   (testing "a stored pair sharing argument 1"

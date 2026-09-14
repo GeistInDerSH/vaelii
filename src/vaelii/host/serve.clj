@@ -74,7 +74,8 @@
 
 (defn- op*
   "The same, for a `vaelii.core` fn that takes **no KB** — the static rosters and the
-  pure renderers (`levels`, `calculi`, `readable-sentence`, `quality-report`).  The
+  pure renderers (`levels`, `calculi`, `readable-sentence`, `sentence-of`,
+  `quality-report`).  The
   daemon still supplies a KB to every row, so this one drops it; `kbless-ops` below is
   the roster a caller generating from this table reads, since a closure cannot be asked
   which shape it has."
@@ -86,7 +87,7 @@
   know whether an op's first `vaelii.core` parameter is the KB the daemon supplies or an
   argument the caller sends: `vaelii.host.client`'s wrappers (arity for arity) and
   `vaelii.host.llm.tools`' schemas (parameter by parameter)."
-  #{:levels :calculi :readable-sentence :quality-report})
+  #{:levels :calculi :readable-sentence :sentence-of :quality-report})
 
 (defn- wire-handles
   "`core/handles` as a sorted vector.  The whole-KB roster is a `java.util.Set` that is
@@ -429,13 +430,14 @@
     :vocabulary-audit (op v/vocabulary-audit)
     ;; the exceptWhen fixpoint's instrumentation (docs/exceptions.md)
     :settle-stats (op v/settle-stats)
-    ;; the rest of `kbless-ops` (`:quality-report` above is the fourth): the retrieval
-    ;; stack and the shipped calculi as data, and a stored rule's sentence with its
-    ;; author's variable names put back — the last of which a client needs in order to
-    ;; *display* a rule it fetched
+    ;; the rest of `kbless-ops` (`:quality-report` above is the fifth): the retrieval
+    ;; stack and the shipped calculi as data, and a stored rule's sentence — canonical, or
+    ;; with its author's variable names put back.  A rule map crosses the wire with no
+    ;; `:sentence`, so a client needs one of the last two to *display* a rule it fetched
     :levels            (op* v/levels)
     :calculi           (op* v/calculi)
     :readable-sentence (op* v/readable-sentence)
+    :sentence-of       (op* v/sentence-of)
     ;; the three usability reads.  `:describe` is what a remote reader asks instead of a
     ;; dozen round trips — one call answers arity, declarations, properties, closures and
     ;; counts for a term, and the browser's term page is built on it.  `:why-not` is

@@ -313,8 +313,8 @@
   (let [bounds (registry-bounds kb base)]
     (distinct
      (for [rsx (assumption-rules kb base)
-           :let [ante  (vec (rules/antecedents (:sentence rsx)))
-                 head  (rules/consequent (:sentence rsx))
+           :let [ante  (vec (:antecedent rsx))
+                 head  (:consequent rsx)
                  guard (provers/rule-guard kb rsx base)]
            binding (res/prove kb (fn [g] (provers/candidate-rules kb g base)) ante base bounds)
            :when (or (nil? guard) (guard binding))]
@@ -510,6 +510,20 @@
           :when        (or (seq ids) (seq neg-ids))]
       [ids neg-ids (res/substitute consequent b2)])))
 
+(defn- check-minimize-weight
+  "Throw `:not-well-formed` unless `weight` — the ground weight one binding of the
+  `asp/minimize` rule `rsx` read off a background fact — is an integer inside the solver's
+  32-bit weight range.  The ASPIF writer prints the weight unchanged, and a backend handed
+  a `2.5` or a symbol rejects the whole program as `:solver-failed :status :unknown`, a
+  report that names no fact."
+  [rsx weight]
+  (when-not (and (integer? weight) (<= Integer/MIN_VALUE weight Integer/MAX_VALUE))
+    (let [surface (rules/rewrap (sx/sentence-of rsx) nil nil nil (rules/constraint-of rsx))]
+      (throw (ex-info (str "an asp/minimize weight must be an integer in the solver's 32-bit "
+                           "range; a background fact bound " (pr-str weight) " in "
+                           (pr-str surface))
+                      {:type :not-well-formed :sentence surface :weight weight})))))
+
 (defn- constraint-nogoods
   "Ground every constraint rule visible from `base` into nogoods, one per satisfying
   binding of its body.  A positive body yields a `:nogood` (those choice heads forbidden
@@ -522,11 +536,17 @@
         idx          (choice-arg-index (keys head->id))
         bounds       (registry-bounds kb base)]
     (for [rsx (constraint-rules kb base)
-          :let [body   (vec (rules/antecedents (:sentence rsx)))
-                conseq (rules/consequent (:sentence rsx))
+          :let [body   (vec (:antecedent rsx))
+                conseq (:consequent rsx)
                 hard?  (= :hard (rules/constraint-of rsx))]
-          [ids neg-ids marker] (ground-constraint-body kb base body conseq choice-preds head->id idx bounds)]
-      (cond-> {:nogood ids :priority 1 :sentence (list 'contradicts marker)}
+          [ids neg-ids marker] (ground-constraint-body kb base body conseq choice-preds head->id idx bounds)
+          ;; a soft's ground consequent marker may carry an objective level and a per-head
+          ;; weight (`asp/minimize` / a priority-tagged soft); an ordinary soft reads back
+          ;; level 1, unit weight (rules/soft-cost-of), so nothing changes for the rest
+          :let [{:keys [priority weight marker]} (rules/soft-cost-of marker)
+                _ (when (some? weight) (check-minimize-weight rsx weight))]]
+      (cond-> {:nogood ids :priority priority :sentence (list 'contradicts marker)}
+        weight        (assoc :weight weight)
         (seq neg-ids) (assoc :neg neg-ids)
         hard?         (assoc :hard true)))))
 
@@ -568,7 +588,7 @@
     (for [rsx (cardinality-rules kb base)
           :let [{:keys [op k counted]} (rules/cardinality-of rsx)
                 hard?      (= :hard (rules/constraint-of rsx))
-                pattern    (first (rules/antecedents (:sentence rsx)))
+                pattern    (first (:antecedent rsx))
                 group-vars (remove #{counted}
                                    (distinct (filter sx/variable?
                                                      (tree-seq sequential? seq pattern))))

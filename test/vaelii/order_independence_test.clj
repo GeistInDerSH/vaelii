@@ -168,11 +168,63 @@
   ([label ops observe cap]
    (one-outcome-under! label (mapv vector ops) observe cap)))
 
+(defn- one-outcome-necessarily!
+  "Assert order-independence over `ops`, as `one-outcome!` does, and additionally that
+  every op is necessary: removing any single one gives a reading different from the whole.
+  Return the single outcome.
+
+  `one-outcome!` proves the N ops are *sufficient* for the reading and that no ordering of
+  them changes it.  It does not prove the reading needs all N.  An op that moves no field
+  of the reading — a taxonomy edge the conclusion is reached without, a fact the outcome
+  never mentions — passes `one-outcome!`, and a KB that never received that op reads the
+  same, so the scenario does not test the op's presence at all.  This runs each N-1 subset
+  (the ops in their given order, one dropped) and fails naming any op whose removal
+  reproduces the outcome.
+
+  The reading is what decides necessity, so a reproduced outcome is a reason to enrich the
+  `observe` before it is a reason to drop the op: a field that separates the op's own
+  mechanism from an outcome reached another way makes the op necessary and the test
+  stronger.  Flat ops only — ops that constrain one another, a `retract!` on the handle its
+  own `assert` allocated, cannot drop independently and belong with the confluence tests
+  below.
+
+  The necessity leg drops each op from its given-order position and runs that N-1 subset
+  once, so a *pass* is conclusive (a globally-redundant op reproduces the outcome in the
+  given order too, and is caught) but a *redundant verdict* is given-order-only: an op the
+  check flags could still be necessary under some other order, if the N-1 subset is itself
+  order-dependent.  So a flag is a reason to enrich or to confirm all-order inertness
+  before trimming the op, never on its own a licence to drop it."
+  ([label ops observe] (one-outcome-necessarily! label ops observe nil))
+  ([label ops observe cap]
+   (let [ops       (vec ops)
+         outcome   (one-outcome! label ops observe cap)
+         redundant (into []
+                         (keep (fn [i]
+                                 (when (= outcome
+                                          (run-ops (into (subvec ops 0 i)
+                                                         (subvec ops (inc i)))
+                                                   observe))
+                                   i)))
+                         (range (count ops)))]
+     (is (empty? redundant)
+         (str label ": every op must be necessary, but removing op(s) " (pr-str redundant)
+              " left the reading unchanged — a KB that never received them reads it too, so"
+              " the scenario does not test their presence.\n  outcome: " (pr-str outcome)))
+     outcome)))
+
 ;; ---- defaults and their exceptions --------------------------------------
 
 (deftest penguin-cascade-is-order-independent
   ;; 5 assertions, 120 orderings. The default may fire before or after the KB learns
   ;; Tweety is a penguin, before or after it learns penguins are birds at all.
+  ;;
+  ;; `one-outcome-necessarily!`, so every one of the five is required for the reading and
+  ;; not only agreed upon by the orderings.  The `:tweety-is-bird` field is why
+  ;; `(genl penguin bird)` is among them: without it Tweety is not a bird, the flight
+  ;; default never applies, and `(flies Tweety)` is absent for that reason instead of the
+  ;; intended one — an outcome a `:tweety-flies` reading alone cannot tell from the
+  ;; exception defeating the default, so the edge would drop with the reading unchanged.
+  ;; With the inherited membership in the reading, the edge moves it and is necessary.
   (let [ops [#(v/assert % (default-rule '[(bird ?x)] '(flies ?x)) 'CxUniverse)
              #(v/assert-rule % '[(penguin ?x)] '(not (flies ?x)) 'CxUniverse {:direction :forward})
              #(v/assert % '(genl penguin bird) 'CxUniverse)
@@ -185,12 +237,14 @@
         observe (fn [kb]
                   {:tweety-flies (boolean (seq (v/sentexes-matching kb '(flies Tweety) 'CxUniverse)))
                    :tweety-grounded (boolean (seq (v/sentexes-matching kb '(not (flies Tweety)) 'CxUniverse)))
+                   :tweety-is-bird (v/isa? kb 'Tweety 'bird)
                    :robin-flies (boolean (seq (v/sentexes-matching kb '(flies Robin) 'CxUniverse)))
                    :conflicts (count (v/conflicts kb))})
-        result (one-outcome! "penguin cascade" ops observe)]
+        result (one-outcome-necessarily! "penguin cascade" ops observe)]
     (testing "and the one outcome is the common-sense one"
       (is (false? (:tweety-flies result)))
       (is (true? (:tweety-grounded result)))
+      (is (true? (:tweety-is-bird result)))             ; the edge places the penguin under bird
       (is (true? (:robin-flies result)))                ; the exception is not contagious
       (is (zero? (:conflicts result))))
     (tu/clear-kb! (tu/test-kb))))
@@ -201,6 +255,11 @@
   ;; after them (sweeping a conclusion that already fired).  Both must settle to the
   ;; same belief, forward *and* backward — the whole point of the block/sweep machinery
   ;; being order-independent.  24 orderings.
+  ;;
+  ;; The `:tweety-is-bird` field is why `(bird Tweety)` is necessary: without it Tweety is
+  ;; not a bird, the rule never applies, and `(flies Tweety)` is absent for that reason
+  ;; instead of the exception blocking it — an outcome a flight-only reading cannot tell
+  ;; from the block, so the fact would drop with the reading unchanged.
   (let [ops [#(v/assert % '(exceptWhen (penguin ?x)
                                        (set/defaultRule (set/forwardRule (implies (and (bird ?x)) (flies ?x)))))
                         'CxUniverse {:direction :forward})
@@ -210,12 +269,14 @@
         observe (fn [kb]
                   {:tweety-query (boolean (seq (v/sentexes-matching kb '(flies Tweety) 'CxUniverse)))
                    :tweety-ask   (v/ask? kb '(flies Tweety) 'CxUniverse)
+                   :tweety-is-bird (v/isa? kb 'Tweety 'bird)
                    :robin-query  (boolean (seq (v/sentexes-matching kb '(flies Robin) 'CxUniverse)))
                    :conflicts    (count (v/conflicts kb))})
-        result (one-outcome! "exceptWhen" ops observe)]
+        result (one-outcome-necessarily! "exceptWhen" ops observe)]
     (testing "the excepted binding never flies, forward or backward; the other does"
       (is (false? (:tweety-query result)))
       (is (false? (:tweety-ask result)))
+      (is (true? (:tweety-is-bird result)))             ; the blocked rule's premise stands
       (is (true? (:robin-query result)))
       (is (zero? (:conflicts result))))
     (tu/clear-kb! (tu/test-kb))))
@@ -252,19 +313,35 @@
 (deftest a-default-feeding-a-bare-rule-is-order-independent
   ;; The downstream conclusion (can_travel) must track the defeat of its antecedent
   ;; whichever order the pieces arrive in.
+  ;;
+  ;; Robin is a plain bird with no exception, so the default flies it and the travel rule
+  ;; carries it: the positive control that makes the default (op 0) and the travel rule
+  ;; (op 1) necessary, and the one place `can_travel`'s forward direction is exercised in
+  ;; this file.  `:tweety-is-bird` makes `(genl penguin bird)` necessary for the same reason
+  ;; as `penguin-cascade` — without it Tweety is grounded for not being a bird rather than
+  ;; for the exception defeating the default.  With Robin and that field every op is
+  ;; necessary, so this runs under `one-outcome-necessarily!`.  6 assertions, 720 orderings.
   (let [ops [#(v/assert % (default-rule '[(bird ?x)] '(flies ?x)) 'CxUniverse)
              #(v/assert-rule % '[(flies ?x)] '(can_travel ?x) 'CxUniverse {:direction :forward})
              #(v/assert-rule % '[(penguin ?x)] '(not (flies ?x)) 'CxUniverse {:direction :forward})
              #(v/assert % '(genl penguin bird) 'CxUniverse)
              ;; known-true, so the exception concludes :monotonic and defeats the default
-             #(v/assert % '(penguin Tweety) 'CxUniverse {:strength :monotonic})]
+             #(v/assert % '(penguin Tweety) 'CxUniverse {:strength :monotonic})
+             #(v/assert % '(bird Robin) 'CxUniverse)]
         observe (fn [kb]
                   {:flies (boolean (seq (v/sentexes-matching kb '(flies Tweety) 'CxUniverse)))
-                   :travels (boolean (seq (v/sentexes-matching kb '(can_travel Tweety) 'CxUniverse)))})
-        result (one-outcome! "default feeding a bare rule" ops observe)]
+                   :travels (boolean (seq (v/sentexes-matching kb '(can_travel Tweety) 'CxUniverse)))
+                   :tweety-is-bird (v/isa? kb 'Tweety 'bird)
+                   :robin-flies (boolean (seq (v/sentexes-matching kb '(flies Robin) 'CxUniverse)))
+                   :robin-travels (boolean (seq (v/sentexes-matching kb '(can_travel Robin) 'CxUniverse)))})
+        result (one-outcome-necessarily! "default feeding a bare rule" ops observe)]
     (testing "a defeated antecedent withdraws the conclusion built on it"
       (is (false? (:flies result)))
       (is (false? (:travels result))))
+    (testing "while the plain bird flies and travels — the rules do fire when nothing defeats them"
+      (is (true? (:tweety-is-bird result)))
+      (is (true? (:robin-flies result)))
+      (is (true? (:robin-travels result))))
     (tu/clear-kb! (tu/test-kb))))
 
 (deftest a-rule-joined-to-a-growing-transitive-extent-is-order-independent
@@ -335,7 +412,7 @@
         ;; 720 orderings, sampled: the split this guards against is a majority of them,
         ;; so a deterministic spread finds it at a fraction of the walk (`ordering-sample`
         ;; above says why sampling is the norm here).
-        result (one-outcome! "a rule over a growing prover extent" ops observe 120)]
+        result (one-outcome-necessarily! "a rule over a growing prover extent" ops observe 120)]
     (testing "every link of the causal chain is one the agent is responsible for"
       (is (= '#{(responsibleFor FoxO Sings)
                 (responsibleFor FoxO Falls)
@@ -351,6 +428,11 @@
   ;; mark: asserted monotonic, re-asserted bare, and then met by a known-true negation,
   ;; the original was *defeated*, where the same three sentences without the bare
   ;; re-assert left an irreducible pair.  Six orderings, one outcome.
+  ;;
+  ;; `one-outcome!`, not `one-outcome-necessarily!`: this test's claim is that the bare
+  ;; re-assert (op 1) changes nothing, so it is deliberately not necessary and a
+  ;; leave-one-out check would forbid the very no-op under test.  The narrowing that a
+  ;; re-assert cannot do is checked by the retract-and-re-assert block below.
   (let [ops [#(v/assert % '(flies Tweety) 'CxUniverse {:strength :monotonic})
              #(v/assert % '(flies Tweety) 'CxUniverse)
              #(v/assert % '(not (flies Tweety)) 'CxUniverse {:strength :monotonic})]
@@ -380,13 +462,16 @@
 
 (defn- blocked-observe
   "The reading a block-condition scenario is judged by: every conclusion the KB holds on
-  `seen`, the backward entry point's answer for each of `subjects`, and the clash report.  The
-  stored sentences alone would not separate a conclusion that was never drawn from one
-  drawn and then swept under a name nobody asks about."
-  [seen subjects]
+  `seen`, the backward entry point's answer for each of `subjects`, whether the scenario's
+  `merge-pair` did merge, and the clash report.  The stored sentences alone would not
+  separate a conclusion that was never drawn from one drawn and then swept under a name
+  nobody asks about, and `:merged` is why a scenario named for a merged term does not pass
+  with the merge a no-op."
+  [seen subjects merge-pair]
   (fn [kb]
     {:seen      (set (map :sentence (v/sentexes-matching kb (list seen '?x) '?c)))
      :asked     (mapv #(v/ask? kb (list seen %) 'CxUniverse) subjects)
+     :merged    (apply v/same-class? kb merge-pair)
      :conflicts (count (v/conflicts kb))}))
 
 (deftest a-block-condition-over-a-merged-term-is-order-independent
@@ -401,6 +486,12 @@
   ;; `except_recheck_test/every-arrival-order-of-a-merge-reaches-one-belief` walks the
   ;; same two shapes over the stored sentences; this reads the backward entry point and the
   ;; clash report beside them, which is what a stored-sentence reading cannot see.
+  ;;
+  ;; `one-outcome!`, not `one-outcome-necessarily!`: the `:merged` field pins the merge, so
+  ;; the merge and the skip are each necessary, but the rule and the mark stay redundant for
+  ;; the blocked absence — dropping either leaves `:seen` empty — so a leave-one-out check
+  ;; cannot hold.  The block's positive necessity, the same subject seen *without* the skip,
+  ;; is the sibling `except_recheck_test`.
   (testing "the firing's own binding is the retired spelling"
     ;; `(qmark QOne)` binds `?x` to a term the merge retires, and the exception has to be
     ;; asked under the representative wherever in the order the merge lands.
@@ -410,8 +501,9 @@
                #(v/assert % '(qmark QOne) 'CxUniverse)
                #(v/assert % '(rewriteOf QTwo QOne) 'CxUniverse)
                #(v/assert % '(qskip QOne) 'CxUniverse)]
-          result (one-outcome! "a merged binding" ops (blocked-observe 'qseen '[QOne QTwo]))]
-      (is (= {:seen #{} :asked [false false] :conflicts 0} result)
+          result (one-outcome! "a merged binding" ops
+                               (blocked-observe 'qseen '[QOne QTwo] '[QOne QTwo]))]
+      (is (= {:seen #{} :asked [false false] :merged true :conflicts 0} result)
           "the excepted binding concludes nothing under either spelling, forward or backward")))
   (testing "the exception conjunct's own constant is the retired spelling"
     ;; Nothing the firing binds has merged: what moved is a term the *rule* was written
@@ -423,8 +515,9 @@
                #(v/assert % '(cmark CBase) 'CxUniverse)
                #(v/assert % '(rewriteOf CTwo COne) 'CxUniverse)
                #(v/assert % '(cskip CTwo) 'CxUniverse)]
-          result (one-outcome! "a merged conjunct constant" ops (blocked-observe 'cseen '[CBase]))]
-      (is (= {:seen #{} :asked [false] :conflicts 0} result)
+          result (one-outcome! "a merged conjunct constant" ops
+                               (blocked-observe 'cseen '[CBase] '[COne CTwo]))]
+      (is (= {:seen #{} :asked [false] :merged true :conflicts 0} result)
           "a conjunct naming a retired term is asked under the representative that answers")))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -434,15 +527,23 @@
   ;; term the KB has an answer for under its representative, so the rule concludes where
   ;; it must not — where a silently-false exception merely fails to guard.  This one did
   ;; not vary with the ordering at all: it drew the conclusion in all 24.
+  ;;
+  ;; `one-outcome!`, not `one-outcome-necessarily!`: the `:merged` field pins the merge, so
+  ;; the merge and the `nskip` fact are each necessary, but the rule and the `nmark` fact
+  ;; stay redundant for the sound absence — dropping either keeps it absent — so a
+  ;; leave-one-out check cannot hold.  The check that the rule fires when it soundly may is
+  ;; `naf_test`'s own positive case; here the claim is that a merged term does not make it
+  ;; fire when it must not.
   (let [ops [#(v/assert % '(set/defaultRule
                             (set/forwardRule (implies (and (nmark ?x) (unknown (nskip ?x))) (nseen ?x))))
                         'CxUniverse {:direction :forward})
              #(v/assert % '(nmark NOne) 'CxUniverse)
              #(v/assert % '(rewriteOf NTwo NOne) 'CxUniverse)
              #(v/assert % '(nskip NOne) 'CxUniverse)]
-        result (one-outcome! "naf over a merged term" ops (blocked-observe 'nseen '[NOne NTwo]))]
+        result (one-outcome! "naf over a merged term" ops
+                             (blocked-observe 'nseen '[NOne NTwo] '[NOne NTwo]))]
     (testing "a term with an answer under its representative is not absent"
-      (is (= {:seen #{} :asked [false false] :conflicts 0} result))))
+      (is (= {:seen #{} :asked [false false] :merged true :conflicts 0} result))))
   (tu/clear-kb! (tu/test-kb)))
 
 ;; ---- the represented dilemma --------------------------------------------
@@ -471,7 +572,7 @@
                      :classes [(v/defeat-class kb pos) (v/defeat-class kb neg)]
                      :contradictions (count (v/contradictions kb))
                      :conflicts (count (v/conflicts kb))}))
-        result (one-outcome! "nixon diamond" ops observe)]
+        result (one-outcome-necessarily! "nixon diamond" ops observe)]
     (testing "both sides are believed — the dilemma is represented, not decided"
       (is (true? (:pacifist result)))
       (is (true? (:not-pacifist result))))
@@ -513,16 +614,16 @@
         reading (fn [reports]
                   (mapv #(-> % :sides first :sentence pr-str) reports))]
     (testing "contradictions — three represented dilemmas at :default"
-      (let [result (one-outcome! "dilemma list ordering"
-                                 (mapv #(pair % {}) preds)
-                                 (fn [kb] {:order (reading (v/contradictions kb))}))]
+      (let [result (one-outcome-necessarily! "dilemma list ordering"
+                                             (mapv #(pair % {}) preds)
+                                             (fn [kb] {:order (reading (v/contradictions kb))}))]
         (is (= 3 (count (:order result))) "all three pairs are reported")
         (is (= (sort (:order result)) (:order result))
             "the list is in content order, so no ordering can put a different one first")))
     (testing "conflicts — the same claim for the irreducible :monotonic reading"
-      (let [result (one-outcome! "conflict list ordering"
-                                 (mapv #(pair % {:strength :monotonic}) preds)
-                                 (fn [kb] {:order (reading (v/conflicts kb))}))]
+      (let [result (one-outcome-necessarily! "conflict list ordering"
+                                             (mapv #(pair % {:strength :monotonic}) preds)
+                                             (fn [kb] {:order (reading (v/conflicts kb))}))]
         (is (= 3 (count (:order result))) "all three pairs are reported")
         (is (= (sort (:order result)) (:order result))
             "the list is in content order, so no ordering can put a different one first")))
@@ -531,7 +632,7 @@
       ;; opens all three dilemmas at once.  So the batch cannot be what varies: what
       ;; varies is the arrival order of the facts the reports are built from, which is
       ;; exactly what the stored vector is in and exactly what `ranked` has to remove.
-      (let [result (one-outcome!
+      (let [result (one-outcome-necessarily!
                     "preview dilemma list ordering"
                     (mapv (fn [p] #(v/assert % (list p 'OrderedSubject) 'CxUniverse {}))
                           preds)
@@ -629,7 +730,7 @@
              ;; `:monotonic` the refused write is a fact the KB legitimately does not
              ;; hold, and which fact that is depends on which of the two was written
              ;; first, exactly as two known-true claims about one slot always have
-             (cond-> (select-keys full [:accounted :stuck])
+             (cond-> (select-keys full [:accounted])
                (= :default strength) (assoc :believed (:believed full))))))]
     {:invariant invariant :readings @seen}))
 
@@ -793,7 +894,7 @@
           {:from-january (sort (map (comp str '?x) (v/ask kb '(the_best ?x) month)))
            :from-year    (sort (map (comp str '?x) (v/ask kb '(the_best ?x) year)))
            :merged?      (boolean (v/same-class? kb 'LaMulanaTwo 'Silksong))})
-        result (one-outcome! "a computed calendar genlCx edge" ops observe)]
+        result (one-outcome-necessarily! "a computed calendar genlCx edge" ops observe)]
     (testing "and the one outcome is that the computed edge did the merge"
       (is (true? (:merged? result)))
       (is (= ["LaMulanaTwo"] (:from-january result))
@@ -805,39 +906,37 @@
 (deftest a-late-asymmetric-mark-is-accounted-for-in-every-ordering
   ;; `(asymmetric asBelow)` with both directions of one pair: 6 orderings, and the two
   ;; that put the declaration last are the ones with no entry point left to refuse at — both
-  ;; facts are already stored and believed when the mark lands, so the exposure pass is
-  ;; the whole of what keeps `conflicts`, `contradictions` and `violations` from all
-  ;; being empty over a pair the KB's own vocabulary forbids.
+  ;; facts are already stored and believed when the mark lands, and the mark reaches back:
+  ;; two known-true facts cannot be weighed, so the pair stands in `conflicts`, the answer
+  ;; a recover of the same records gives.
   (let [{:keys [invariant readings]}
         (constraint-outcome! "late asymmetric mark" :monotonic
                              ['(asymmetric asBelow) '(asBelow Aa Bb) '(asBelow Bb Aa)]
                              '(asBelow ?x ?y))]
     (testing "the clash is answered exactly once, whichever of the three arrived last"
-      (is (= 1 (:accounted invariant)))
-      (is (zero? (:stuck invariant))
-          "one side is turned away or the pair is named — never an irreducible conflict"))
+      (is (= 1 (:accounted invariant))))
     (one-entry-point-each! readings)
-    (testing "and the entry point the late mark takes is the ledger, with both facts standing"
+    (testing "and the entry point the late mark takes is `conflicts`, with both facts standing"
       (let [late (filterv #(= 2 (count (:believed %))) readings)]
         (is (= 2 (count late)) "two of the six put the mark last")
-        (is (every? #(= [:asymmetric] (:reported %)) late))))
+        (is (every? #(= 1 (:stuck %)) late))))
     (tu/clear-kb! (tu/test-kb))))
 
 (deftest a-late-asymmetric-mark-leaves-the-same-beliefs-in-every-ordering
   ;; The same three sentences at `:default`, where the entry point refuses nothing — an
   ;; `asymmetric` violation refuses only against a known-true converse — so the whole
-  ;; believed extent is identical across all 6 and joins the reading.  What remains for
-  ;; arrival order to pick is the account: a represented dilemma when a fact arrived
-  ;; last, a ledger entry when the mark did.
+  ;; believed extent is identical across all 6 and joins the reading, and so is the entry
+  ;; point: a represented dilemma, whether a fact or the mark arrived last, since a late
+  ;; mark reaches back as a late fact does.
   (let [{:keys [invariant readings]}
         (constraint-outcome! "late asymmetric mark at :default" :default
                              ['(asymmetric asAside) '(asAside Aa Bb) '(asAside Bb Aa)]
                              '(asAside ?x ?y))]
     (testing "both directions stand in every ordering, and the clash is named once"
       (is (= ["(asAside Aa Bb)" "(asAside Bb Aa)"] (:believed invariant)))
-      (is (= 1 (:accounted invariant)))
-      (is (zero? (:stuck invariant))))
-    (one-entry-point-each! readings)
+      (is (= 1 (:accounted invariant))))
+    (is (every? #(= 1 (:weighed %)) readings)
+        "every ordering weighs the pair into contradictions")
     (testing "nothing is refused — a default converse is weighed or reported, not turned away"
       (is (every? #(zero? (:refused %)) readings)))
     (tu/clear-kb! (tu/test-kb))))
@@ -854,8 +953,7 @@
                               '(asAbove Aa Bb) '(asAbove Bb Aa)]
                              '(asAbove ?x ?y))]
     (testing "the clash is answered exactly once, whichever of the four arrived last"
-      (is (= 1 (:accounted invariant)))
-      (is (zero? (:stuck invariant))))
+      (is (= 1 (:accounted invariant))))
     (one-entry-point-each! readings)
     (tu/clear-kb! (tu/test-kb))))
 
@@ -869,13 +967,12 @@
                               '(parOfx Bb Cc) '(parOfx Aa Cc)]
                              '(parOfx ?x ?y))]
     (testing "the chain is answered exactly once, whichever of the four arrived last"
-      (is (= 1 (:accounted invariant)))
-      (is (zero? (:stuck invariant))))
+      (is (= 1 (:accounted invariant))))
     (one-entry-point-each! readings)
-    (testing "the six orderings that put the mark last name the chain in the ledger"
+    (testing "the six orderings that put the mark last leave the chain standing in conflicts"
       (let [late (filterv #(= 3 (count (:believed %))) readings)]
         (is (= 6 (count late)))
-        (is (every? #(= [:anti-transitive] (:reported %)) late))))
+        (is (every? #(= 1 (:stuck %)) late))))
     (tu/clear-kb! (tu/test-kb))))
 
 (deftest a-late-functional-mark-is-accounted-for-in-every-ordering
@@ -887,14 +984,13 @@
                              ['(functional ageOfx) '(ageOfx Aa 3) '(ageOfx Aa 4)]
                              '(ageOfx ?x ?y))]
     (testing "the slot is answered exactly once, whichever of the three arrived last"
-      (is (= 1 (:accounted invariant)))
-      (is (zero? (:stuck invariant))))
+      (is (= 1 (:accounted invariant))))
     (one-entry-point-each! readings)
     (tu/clear-kb! (tu/test-kb))))
 
 (deftest a-late-mark-answers-the-way-a-late-disjointness-does
   ;; The precedent the choice above is made against, asserted rather than assumed: a late
-  ;; `(disjoint A B)` over an already-clashing pair reports and leaves belief alone.  The
+  ;; `(disjoint A B)` over an already-clashing pair is decided, as a restart decides it.  The
   ;; two must agree entry point for entry point, or the KB is treating "the declaration came last"
   ;; differently according to which declaration it is.
   (let [marked (constraint-outcome! "late asymmetric mark, per entry point" :monotonic
@@ -1023,7 +1119,7 @@
   (into #{}
         (map (fn [h]
                (let [sx (v/sentex kb h)]
-                 {:sentence (:sentence sx)
+                 {:sentence (v/sentence-of sx)
                   :context  (:context sx)
                   :believed (v/in? kb h)
                   :class    (v/defeat-class kb h)})))
@@ -1146,13 +1242,21 @@
   ;; `genl` is not the same thing as re-firing the rules the edge just connected — so
   ;; without `special/subsumption-seeds` these four sentences derive `(breathes Muffet)`
   ;; in the orders that put the edge before the fact and nothing in the others.
+  ;;
+  ;; The rule is stated over `thing`, the top of a two-edge closure `dog_t ⊑ animal_t ⊑
+  ;; thing`, so `one-outcome-necessarily!` holds both edges to account: Muffet reaches the
+  ;; antecedent only down the whole spec fan, and dropping either edge leaves the fact
+  ;; short of `thing` and the conclusion undrawn.  A rule stated over `animal_t` instead
+  ;; would reach Muffet through the single `dog_t ⊑ animal_t` edge and leave
+  ;; `animal_t ⊑ thing` moving no field of the reading — an edge the scenario names and
+  ;; does not test.
   (let [ops [#(v/assert % '(genl animal_t thing) 'CxUniverse)
              #(v/assert % '(genl dog_t animal_t) 'CxUniverse)
-             #(v/assert % '(implies (animal_t ?x) (breathes ?x)) 'CxUniverse {:direction :forward})
+             #(v/assert % '(implies (thing ?x) (breathes ?x)) 'CxUniverse {:direction :forward})
              #(v/assert % '(dog_t Muffet) 'CxUniverse)]
         observe (fn [kb]
                   {:derived (boolean (seq (v/sentexes-matching kb '(breathes Muffet) 'CxUniverse)))})]
-    (is (= {:derived true} (one-outcome! "subsumption firing" ops observe))
+    (is (= {:derived true} (one-outcome-necessarily! "subsumption firing" ops observe))
         "and the one outcome is the conclusion, not the silence"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1161,16 +1265,17 @@
   ;; antecedent up the *visibility* ancestor set, so a `genlCx` edge changes which facts a
   ;; stored rule can see — and the arriving datum is again the edge, so firing the rules
   ;; keyed on `genlCx` is not the same thing as re-joining the rules the edge just
-  ;; gave a wider view.  Without `special/visibility-seeds` these four sentences derive
-  ;; `(v_seen_p VA)` in the 17 orders that put the edge before the rule or the fact, and
-  ;; nothing in the other 7.
-  (let [ops [#(v/assert % '(genlCx CxVMid CxUniverse) 'CxUniverse)
-             #(v/assert % '(genlCx CxVLow CxVMid) 'CxUniverse)
+  ;; gave a wider view.  Without `special/visibility-seeds` these three sentences derive
+  ;; `(v_seen_p VA)` only when the edge arrives before the rule or the fact, and nothing
+  ;; when it arrives after both.  The rule sees the fact through the one
+  ;; `(genlCx CxVLow CxVMid)` edge, so `one-outcome-necessarily!` holds the edge to
+  ;; account: dropping it leaves the rule blind and the conclusion undrawn.
+  (let [ops [#(v/assert % '(genlCx CxVLow CxVMid) 'CxUniverse)
              #(v/assert % '(v_fact_p VA) 'CxVMid)
              #(v/assert % '(implies (v_fact_p ?x) (v_seen_p ?x)) 'CxVLow {:direction :forward})]
         observe (fn [kb]
                   {:derived (boolean (seq (v/sentexes-matching kb '(v_seen_p VA) 'CxVLow)))})]
-    (is (= {:derived true} (one-outcome! "visibility firing" ops observe))
+    (is (= {:derived true} (one-outcome-necessarily! "visibility firing" ops observe))
         "a rule fires off what its context can see, whenever it was told it could"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1179,17 +1284,18 @@
   ;; `special/visibility-seeds` enumerates from `:rule-antecedents`, so a rule taking
   ;; `(vs_dog_t ?x)` sends it to the facts filed under `vs_dog_t` — and the fact that
   ;; answers that antecedent is filed under `vs_terrier_t`, matchable only down the
-  ;; `genl` spec fan (`roster-antecedent-functors` is what walks it).  Five sentences:
-  ;; the edge arriving last has to re-join the rule over a fact one type below the
-  ;; antecedent it names.
-  (let [ops [#(v/assert % '(genlCx CxSMid CxUniverse) 'CxUniverse)
-             #(v/assert % '(genlCx CxSLow CxSMid) 'CxUniverse)
+  ;; `genl` spec fan (`roster-antecedent-functors` is what walks it).  Four sentences: the
+  ;; `(genlCx CxSLow CxSMid)` edge arriving last has to re-join the rule over a fact one
+  ;; type below the antecedent it names.  Every one of the four is necessary — the edge for
+  ;; visibility, the `genl` edge for the spec fan, the fact, and the rule — so this runs
+  ;; under `one-outcome-necessarily!`.
+  (let [ops [#(v/assert % '(genlCx CxSLow CxSMid) 'CxUniverse)
              #(v/assert % '(genl vs_terrier_t vs_dog_t) 'CxSMid {:strength :monotonic})
              #(v/assert % '(vs_terrier_t SRex) 'CxSMid {:strength :monotonic})
              #(v/assert % '(implies (vs_dog_t ?x) (vs_seen_p ?x)) 'CxSLow {:direction :forward})]
         observe (fn [kb]
                   {:derived (boolean (seq (v/sentexes-matching kb '(vs_seen_p SRex) 'CxSLow)))})]
-    (is (= {:derived true} (one-outcome! "subsumed visibility firing" ops observe ordering-sample))
+    (is (= {:derived true} (one-outcome-necessarily! "subsumed visibility firing" ops observe ordering-sample))
         "a rule fires off a subtype of what its antecedent names, in any arrival order"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1197,31 +1303,76 @@
   ;; The negated-antecedent twin of the visibility case, and the same gap on the other
   ;; branch: `special/visibility-seeds` looked a negated antecedent's roster key
   ;; `[:not v_neg_p]` up in the functor-root index, which nothing is written under, so a
-  ;; genlCx edge arriving after the negative fact never re-joined the rule.  These four
+  ;; genlCx edge arriving after the negative fact never re-joined the rule.  These three
   ;; sentences must derive `(v_neg_seen_p VA)` in every arrival order, not only the ones
-  ;; that put the edge before the rule and the fact.
-  (let [ops [#(v/assert % '(genlCx CxVNMid CxUniverse) 'CxUniverse)
-             #(v/assert % '(genlCx CxVNLow CxVNMid) 'CxUniverse)
+  ;; that put the edge before the rule and the fact.  The rule reaches the negative fact
+  ;; through the one `(genlCx CxVNLow CxVNMid)` edge, so the edge is necessary and this
+  ;; runs under `one-outcome-necessarily!`.
+  (let [ops [#(v/assert % '(genlCx CxVNLow CxVNMid) 'CxUniverse)
              #(v/assert % '(not (v_neg_p VA)) 'CxVNMid {:strength :monotonic})
              #(v/assert % '(implies (not (v_neg_p ?x)) (v_neg_seen_p ?x)) 'CxVNLow {:direction :forward})]
         observe (fn [kb]
                   {:derived (boolean (seq (v/sentexes-matching kb '(v_neg_seen_p VA) 'CxVNLow)))})]
-    (is (= {:derived true} (one-outcome! "negated visibility firing" ops observe))
+    (is (= {:derived true} (one-outcome-necessarily! "negated visibility firing" ops observe))
         "a rule with a negated antecedent fires off what its context can see, in any order"))
   (tu/clear-kb! (tu/test-kb)))
+
+(defn- a-late-edge-withdraws-what-the-blocker-blocks!
+  "Walk every ordering of `rule` (stated in the unwired context `k`), `(le_p LeA)` in `k`
+  and `(le_q LeA)` in CxUniverse, first without and then with `(genlCx k CxUniverse)`.
+  Without the edge `k` cannot see the blocker, so `(le_r LeA)` is derived; with it the
+  blocker is visible and the conclusion is withdrawn, whichever of the four arrived last.
+
+  Two `one-outcome!` walks, not `one-outcome-necessarily!`: the rule and the `le_p` fact
+  are redundant for the withheld conclusion — dropping either keeps it absent — so the
+  edge-free walk is what shows both do work, as the `naf-over-a-merged-term` test above
+  records for the same shape."
+  [label rule k]
+  (let [base    [#(v/assert % rule k {:direction :forward})
+                 #(v/assert % '(le_p LeA) k)
+                 #(v/assert % '(le_q LeA) 'CxUniverse)]
+        edge    #(v/assert % (list 'genlCx k 'CxUniverse) 'CxUniverse)
+        observe (fn [kb]
+                  (let [h (v/handle-of kb '(le_r LeA) k)]
+                    {:derived (boolean (and h (v/in? kb h)))}))]
+    (is (= {:derived true} (one-outcome! (str label ", no edge") base observe))
+        "the blocker is invisible from the unwired context, so the rule fires")
+    (is (= {:derived false} (one-outcome! label (conj base edge) observe))
+        "the edge makes the blocker visible, so the conclusion is withdrawn in every order"))
+  (tu/clear-kb! (tu/test-kb)))
+
+(deftest an-unknown-antecedent-reads-a-blocker-a-late-context-edge-reveals
+  ;; A context with no `genlCx` edge sees nothing of CxUniverse, so an `(unknown S)`
+  ;; antecedent there holds over an `S` stored in CxUniverse.  Wiring the context under
+  ;; CxUniverse afterwards makes `S` visible, and the firing the edge-free state licensed
+  ;; has to be swept, exactly as when the edge arrived first.
+  (a-late-edge-withdraws-what-the-blocker-blocks!
+   "unknown under a late edge"
+   '(set/forwardRule (implies (and (le_p ?x) (unknown (le_q ?x))) (le_r ?x)))
+   'CxLateNafK))
+
+(deftest an-exception-reads-a-blocker-a-late-context-edge-reveals
+  ;; The `exceptWhen` spelling of the same claim: the exception query is asked from the
+  ;; rule's context, so the edge that widens that context's ancestor set decides it.
+  (a-late-edge-withdraws-what-the-blocker-blocks!
+   "exceptWhen under a late edge"
+   '(exceptWhen (le_q ?x) (set/forwardRule (implies (le_p ?x) (le_r ?x))))
+   'CxLateExcK))
 
 (deftest a-rule-above-fires-on-the-facts-of-a-context-newly-wired-under-it
   ;; the other direction of the same edge, and the one that survives a fix taking only
   ;; the first: a rule stated *above* applies in every context that sees it, so wiring a
   ;; new context under it hands the rule that context's own facts and places
-  ;; the conclusion there.  Seeding is by fact, so it has to reach both ancestor sets.
-  (let [ops [#(v/assert % '(genlCx CxXMid CxUniverse) 'CxUniverse)
-             #(v/assert % '(genlCx CxXLow CxXMid) 'CxUniverse)
+  ;; the conclusion there.  Seeding is by fact, so it has to reach both the fact-above case
+  ;; the sibling above covers and this rule-above case.  Three sentences: the rule in
+  ;; `CxXMid` reaches `CxXLow`'s fact through the one `(genlCx CxXLow CxXMid)` edge, so the
+  ;; edge is necessary and this runs under `one-outcome-necessarily!`.
+  (let [ops [#(v/assert % '(genlCx CxXLow CxXMid) 'CxUniverse)
              #(v/assert % '(x_fact_p XB) 'CxXLow)
              #(v/assert % '(implies (x_fact_p ?x) (x_seen_p ?x)) 'CxXMid {:direction :forward})]
         observe (fn [kb]
                   {:derived (boolean (seq (v/sentexes-matching kb '(x_seen_p XB) 'CxXLow)))})]
-    (is (= {:derived true} (one-outcome! "inherited-rule firing" ops observe))
+    (is (= {:derived true} (one-outcome-necessarily! "inherited-rule firing" ops observe))
         "a rule above is inherited into a context wired under it, whenever that happened"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1258,8 +1409,8 @@
              #(v/assert % '(equals MTom MThomas) 'CxMUp {:strength :monotonic})
              #(v/assert % '(m_fact_p MTom) 'CxMLow {:strength :monotonic})]]
     (is (= {:answered '#{(m_fact_p MThomas)} :asked [true true] :equiv '#{MTom MThomas}}
-           (one-outcome! "a merge above a context edge" ops
-                         (merged-spelling-observe 'm_fact_p 'MTom 'MThomas 'CxMLow)))
+           (one-outcome-necessarily! "a merge above a context edge" ops
+                                     (merged-spelling-observe 'm_fact_p 'MTom 'MThomas 'CxMLow)))
         "the reader that newly sees the merge reads the fact under the name it elected"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1278,7 +1429,7 @@
                                           (v/sentexes-matching kb '(n_fact_p ?x) 'CxNUp)))))]
     (is (= {:answered '#{(n_fact_p NThomas)} :asked [true true] :equiv '#{NTom NThomas}
             :above '#{(n_fact_p NTom)}}
-           (one-outcome! "a merge below a context edge" ops observe))
+           (one-outcome-necessarily! "a merge below a context edge" ops observe))
         "the reader below restates the fact for itself and leaves the original where it lives"))
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1421,16 +1572,19 @@
     (is (= {:answered '#{(r_fur_p RThomas)}
             :asked    [true true]
             :believed '#{(r_mammal_p RThomas) (r_fur_p RThomas)}}
-           (one-outcome! "a rule over a merged term" ops observe))
+           (one-outcome-necessarily! "a rule over a merged term" ops observe))
         "the rule fires at the elected spelling only, whenever the merge arrived"))
   (tu/clear-kb! (tu/test-kb)))
 
 ;; The ops are shared by the sampled test and the exhaustive one, so the two cannot
 ;; drift into checking different things — the only difference between them is how many
-;; of the 120 orderings they walk.
+;; of the 24 orderings they walk.  No op places CxWMid under CxUniverse.  The edge rule
+;; and the `wWireP` fact both sit in CxUniverse and fire there, and a `genlCx` edge is
+;; read globally (`taxonomy/relation-scope`), so neither CxWMid nor CxWLow reads anything
+;; out of CxUniverse.  That edge therefore moves no reading, and the necessity check in
+;; `one-outcome-necessarily!` refuses it.
 (def ^:private derived-edge-ops
-  [#(v/assert % '(genlCx CxWMid CxUniverse) 'CxUniverse)
-   #(v/assert % '(w_fact_p WA) 'CxWMid)
+  [#(v/assert % '(w_fact_p WA) 'CxWMid)
    #(v/assert % '(implies (w_fact_p ?x) (w_seen_p ?x)) 'CxWLow {:direction :forward})
    #(v/assert % '(wWireP CxWLow CxWMid) 'CxUniverse)
    #(v/assert % '(implies (wWireP ?a ?b) (genlCx ?a ?b)) 'CxUniverse {:direction :forward})])
@@ -1442,15 +1596,14 @@
   ;; and a rule concluding the edge reaches the same belief an assert does, or the
   ;; fixpoint would depend on whether the spindle was written or inferred.
   ;;
-  ;; Four orderings, not all 120, for the reason `two-independent-exceptions` above
+  ;; Four orderings, not all 24, for the reason `two-independent-exceptions` above
   ;; takes a handful: an ordering here costs ~2s — deriving the edge recomputes the
   ;; genlCx closure and re-places what it reaches, where every other test in this
-  ;; file runs an ordering in about a millisecond — so the exhaustive walk is four
-  ;; minutes, which is more than the whole rest of the suite.  The handful pins the
-  ;; positions that matter: the edge rule first and last, and the fact arriving before
-  ;; and after the wiring that has to reach it.  A broader deterministic sample is the
-  ;; `^:slow` test below, and `lein gate --all` runs it.
-  (doseq [order [[0 1 2 3 4] [4 3 2 1 0] [2 4 3 1 0] [1 3 0 4 2]]]
+  ;; file runs an ordering in about a millisecond — so the exhaustive walk is about 48
+  ;; seconds.  The handful pins the positions that matter: the edge rule first and last,
+  ;; and the fact arriving before and after the wiring that has to reach it.  A broader
+  ;; deterministic sample is the `^:slow` test below, and `lein gate --all` runs it.
+  (doseq [order [[0 1 2 3] [3 2 1 0] [1 3 2 0] [0 2 3 1]]]
     (let [ops (mapv derived-edge-ops order)
           kb  (tu/fresh)]
       (doseq [op ops] (op kb))
@@ -1460,15 +1613,15 @@
 
 (deftest ^:slow orderings-of-a-derived-context-edge-agree
   ;; The broad form of the 4-ordering test above: a deterministic sample of orderings
-  ;; (`ordering-sample`), not all 120.  Every ordering here recomputes the genlCx
-  ;; closure and re-places what it reaches, so it costs ~2s — the exhaustive 120 is
-  ;; ~5 minutes, more than the rest of the suite put together, for a cross-product
-  ;; whose order-dependence would already surface in a spread of orderings.  The
+  ;; (`ordering-sample`, 16), not all 24.  Every ordering here recomputes the genlCx
+  ;; closure and re-places what it reaches, so it costs ~2s — the exhaustive 24 is about
+  ;; 48 seconds — for a cross-product whose order-dependence would already surface in a
+  ;; spread of orderings.  The
   ;; sample walks the identity, the reverse and a fixed-seed spread between them; raise
   ;; `ordering-sample` or drop the cap for an exhaustive audit.
   (is (= {:derived true}
-         (one-outcome! "derived visibility firing" derived-edge-ops derived-edge-observe
-                       ordering-sample))
+         (one-outcome-necessarily! "derived visibility firing" derived-edge-ops derived-edge-observe
+                                   ordering-sample))
       "a derived edge has to seed what an asserted one seeds, over a sample of orderings")
   (tu/clear-kb! (tu/test-kb)))
 
@@ -1493,7 +1646,7 @@
                    :alice-notflies (v/ask? kb '(believes Alice (not (flies Tweety))) 'CxUniverse)
                    :alice-bird     (v/ask? kb '(believes Alice (bird7 Jack)) 'CxUniverse)
                    :contradictions (count (v/contradictions kb))})
-        result (one-outcome! "belief projection" ops observe)]
+        result (one-outcome-necessarily! "belief projection" ops observe)]
     (testing "and the one outcome is the intended reading"
       (is (true? (:alice-flies result)))
       (is (true? (:bob-notflies result)))
@@ -1521,7 +1674,7 @@
                    :supports (mapv #(count (:support (v/why kb (:id %))))
                                    (v/sentexes-matching kb '(alsoOwns ?o ?b) 'CxUniverse))
                    :conflicts (count (v/conflicts kb))})
-        result  (one-outcome! "symmetric antecedent" ops observe)]
+        result  (one-outcome-necessarily! "symmetric antecedent" ops observe)]
     (testing "and the one outcome is the join's reading"
       (is (true? (:mirrored result))
           "the pair the mirror makes is derived whichever fact arrived second")
@@ -1560,7 +1713,7 @@
                      ;; sorted: the extent readers promise the set, not the order
                      :supports    (vec (sort (map #(count (:support (v/why kb (:id %)))) cs)))
                      :conflicts   (count (v/conflicts kb))}))
-        result  (one-outcome! "symmetric under a super-predicate" ops observe)]
+        result  (one-outcome-necessarily! "symmetric under a super-predicate" ops observe)]
     (testing "and the one outcome is the mirrored pair, derived once"
       (is (= '#{(gAlsoOwns Bob Rex)} (:conclusions result))
           "the sub-predicate's mirror reaches an antecedent stated above it")
@@ -1590,7 +1743,7 @@
                     {:conclusions (set (map :sentence cs))
                      :supports    (vec (sort (map #(count (:support (v/why kb (:id %)))) cs)))
                      :conflicts   (count (v/conflicts kb))}))
-        result  (one-outcome! "symmetric mid-chain" ops observe)]
+        result  (one-outcome-necessarily! "symmetric mid-chain" ops observe)]
     (testing "and the one outcome is the chain the mirror closes, derived once"
       (is (= '#{(mSpans Bo Zed)} (:conclusions result)))
       (is (= [1] (:supports result)))
@@ -1634,7 +1787,7 @@
                    ;; the backward half of the same question, asked of the mirror
                    :proved      (boolean (seq (v/prove kb '(lkinOf Tib Rex))))
                    :conflicts   (count (v/conflicts kb))})
-        result  (one-outcome! "symmetric in the lead position" ops observe)]
+        result  (one-outcome-necessarily! "symmetric in the lead position" ops observe)]
     (testing "and the one outcome is the mirrored pair, forward and backward"
       (is (= '#{(lAlsoOwns Bob Rex)} (:conclusions result)))
       (is (true? (:proved result))
@@ -1671,7 +1824,7 @@
             observe (fn [kb]
                       {:capped (reached kb {:max-results 1 :max-depth 3})
                        :whole  (reached kb {:max-depth 3})})
-            result  (one-outcome! (str "capped proof under " engine) ops observe 24)]
+            result  (one-outcome-necessarily! (str "capped proof under " engine) ops observe 24)]
         (testing (str "and the reading is the sensible one under " engine)
           (is (= 1 (count (:capped result)))
               "a cap of one really is a choice among the three rules")
@@ -1705,7 +1858,7 @@
                    :crossed (boolean (seq (v/sentexes-matching kb '(arity pairOf 3) 'CxUniverse)))
                    :rows    (count (v/sentexes-matching kb '(arity ?r ?n) 'CxUniverse))
                    :conflicts (count (v/conflicts kb))})
-        result (one-outcome! "generator stamping" ops observe)]
+        result (one-outcome-necessarily! "generator stamping" ops observe)]
     (testing "and the one reading is one arity per member, from its own type's rule"
       (is (true? (:pair result)))
       (is (true? (:triple result)))

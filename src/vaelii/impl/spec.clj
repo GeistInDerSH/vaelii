@@ -70,7 +70,6 @@
 ;; `::id` stay the real thing for returns and record fields.
 (s/def ::handle-arg (s/nilable ::handle))
 (s/def ::term some?)                       ; any indexable term (symbol, number, compound)
-(s/def ::polarity #{:positive :negative})     ; which literal it is
 (s/def ::prover some?)                     ; a vaelii.impl.provers/Prover
 (s/def ::solver some?)                     ; a vaelii.impl.solve/Solver
 
@@ -131,13 +130,14 @@
 
 ;; ---- the sentex-map return contract -------------------------------------
 ;; `query` / `sentex` / the extent readers return sentex records, which are maps.
-;; The *stable* contract is the map shape below — `:id`, `:sentence`, `:context`
-;; are always present; a rule adds `:antecedent` / `:consequent` / `:direction`.
+;; The *stable* contract is the map shape below — `:id` and `:context` are always
+;; present; a literal adds `:sentence`, and a rule `:antecedent` / `:consequent` /
+;; `:direction` in its place (`core/sentence-of` builds a rule's `implies` form).
 ;; Treat the result as a map: callers should key into it, never depend on the
 ;; concrete `vaelii.impl.sentex/LiteralSentex` / `RuleSentex` record class, which is an internal
 ;; detail free to change.
-(s/def ::sentex-map (s/keys :req-un [::id ::sentence ::context]
-                            :opt-un [::polarity ::strength]))
+(s/def ::sentex-map (s/keys :req-un [::id ::context]
+                            :opt-un [::sentence ::strength]))
 (s/def ::sentex-seq (s/coll-of ::sentex-map))
 
 ;; ---- construction -------------------------------------------------------

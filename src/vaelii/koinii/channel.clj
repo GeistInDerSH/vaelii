@@ -479,7 +479,7 @@
       (throw (ex-info (str "koinii: cannot dispute handle " (pr-str target-handle)
                            " — it names no record on this medium")
                       {:type :koinii/no-such-handle :handle target-handle})))
-    (assert handle (list 'not (:sentence sx)))
+    (assert handle (list 'not (v/sentence-of sx)))
     (assert handle (list 'disputes (:agent handle) (v/sentex-handle target-handle)))))
 
 (defn vote

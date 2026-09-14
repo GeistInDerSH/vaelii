@@ -28,7 +28,7 @@
 (defn- ->just
   "A ground justification: `id`, a `:rule` informant, one antecedent, one consequence."
   [id ante conseq]
-  (jtms/->Justification id :rule [ante] conseq nil :default #{}))
+  (jtms/->just id :rule [ante] conseq nil :default))
 
 (defn- reader-during-writer-stress
   "Run the stress against the network `make-tms` builds.  Returns

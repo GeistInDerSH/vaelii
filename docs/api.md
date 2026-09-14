@@ -277,12 +277,15 @@ default-chain-opts                              ; the bounds a chain run takes w
 (export! kb dir opts?)                         ; write it out as a portable dump — field-map frames,
                                                ; no class names; opts {:variant :records|:records+index
                                                ; :compression :gzip|:xz|:none :chunk-size n
-                                               ; :provenance? bool :on-progress f} — 10000 records a
-                                               ; frame, provenance written by default
+                                               ; :provenance? bool :belief? bool :on-progress f} —
+                                               ; 10000 records a frame, provenance and the belief
+                                               ; image written by default
 (import! kb dir opts?)                         ; read a dump back into the (empty) kb — export!'s
                                                ; inverse.  opts {:belief? true|:stored|false
                                                ; :report-every n :on-progress f}:
-                                               ; true (the default) recovers belief too; :stored
+                                               ; true (the default) installs the dump's belief
+                                               ; image when it still describes the records it
+                                               ; landed, and recovers belief otherwise; :stored
                                                ; stores every justification and premise mark and
                                                ; leaves the recover for later; false reads no
                                                ; justification stream at all — browsable, not
@@ -378,6 +381,9 @@ default-chain-opts                              ; the bounds a chain run takes w
                                                ; and handles are not compared
 (readable-sentence sx)                         ; a sentex's sentence with the author's variable names
                                                ; put back — a rule is stored numbered (?var0, ?var1)
+(sentence-of sx)                               ; a sentex's canonical sentence — a literal's :sentence,
+                                               ; or a rule's (implies …) form, built from its
+                                               ; :antecedent / :consequent (a rule map has no :sentence)
 (representative kb term [context]) / (same-class? kb a b [context])  ; the equality
 (equiv-class kb term [context]) / (deprecated? kb term)  ; partition, read — scoped by
                                                          ; context like genls / specs
@@ -565,8 +571,11 @@ a **conjunct** of a vector goal is refused `:not-well-formed` — a join's conju
 their bindings, so there is no per-literal context to honor; ask the whole conjunction in
 `Ctx`.  There is no `ist` on a rule's antecedent side (docs/contexts.md).
 
-A **sentex map** has the stable keys `:id` (the handle), `:sentence`, `:context`,
-`:polarity`, and for a rule `:antecedent` / `:consequent` / `:direction` / `:defeasible`.
+A **sentex map** has the stable keys `:id` (the handle) and `:context`; a literal adds
+`:sentence`, and a rule `:antecedent` / `:consequent` / `:direction` / `:defeasible` in its
+place. A rule map carries no `:sentence` — `sentence-of` builds its `implies` form, and
+`readable-sentence` the same form in the author's variable names. A negative literal's
+`:sentence` is `(not S)`; no separate key carries the sign.
 Key into it.
 The concrete record class behind it (`vaelii.impl.sentex/LiteralSentex` / `RuleSentex`) is an
 `impl` detail and not part of the contract — never `instance?`-test it.

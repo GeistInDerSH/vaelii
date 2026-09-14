@@ -53,7 +53,7 @@
                                (not (sx/exceptWhen-meta? (:sentence s)))
                                (jtms/in? tms h)
                                (visible? (:context s))
-                               (= (:polarity pt) (:polarity s))
+                               (= (sx/negative? pt) (sx/negative? s))
                                (res/unify (:sentence pt) (:sentence s)))
                       h)))
                 (p/sentex-ids recs)))))

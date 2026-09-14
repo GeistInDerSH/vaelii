@@ -273,12 +273,23 @@
   (prop-double "vaelii.index.snapshot-drift" 0.5 0 1))
 
 (defn belief-snapshot?
-  "Is the belief certificate written on a full recover and read on the next cold open
-  (`vaelii.belief.snapshot`, default off)?  When on, a clean disk KB's cold open skips the
-  closing settle's definitional-clash scan and rederives identical belief
-  (`vaelii.impl.disk.belief-snapshot`).  Off is byte-identical to never having the file."
+  "Refuse `vaelii.belief.snapshot`, naming the backend that writes and installs a belief
+  image instead.
+
+  A belief image is written and installed for a `{:backend :disk-snapshot}` KB on the
+  dense network (`vaelii.impl.belief-image`), the same KB whose index is read from an
+  image, and no property turns it on or off.  Refused rather than ignored, on
+  `index-snapshot?`'s argument: an operator whose unit file sets it meets a refusal at the
+  open instead of a switch that does nothing."
   []
-  (prop-bool "vaelii.belief.snapshot" false))
+  (when-let [v (raw "vaelii.belief.snapshot")]
+    (throw (ex-info (str "vaelii.belief.snapshot=" v " is not a switch this build reads"
+                         " — a belief image is written and installed for a"
+                         " {:backend :disk-snapshot} KB, so the KB's own opts record that"
+                         " it was asked for.  Unset the property and name the backend.")
+                    {:type :unknown-option :mismatch :unknown-key :property "vaelii.belief.snapshot" :value v
+                     :remedy {:backend :disk-snapshot}})))
+  nil)
 
 (defn arbitrate-constraints?
   "Does the process default to arbitrating a definitional clash rather than refusing it
@@ -403,6 +414,37 @@
   []
   (prop-long "VAELII_MAX_QUERY_DEPTH" 256 0 nil))
 
+(defn classify-max-cluster-members
+  "The most members a coupled dilemma cluster may hold for the solve-free classifier to
+  enumerate its optimal resolutions (`VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS`, default 12).
+  A larger cluster is left `:supportable` — sound, since `:supportable` claims neither
+  forced nor excluded — and a backend is the tool for a large interacting set.  Read per
+  classification by `vaelii.impl.asp.label/classify-local`, which enumerates resolutions
+  from the JTMS and never calls a solver: the `asp` in that namespace names the
+  contradiction-solving subsystem, not clingo."
+  []
+  (prop-long "VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS" 12 1 nil))
+
+(defn classify-resolution-budget
+  "The number of candidate subsets one cluster's minimum-resolution enumeration may examine
+  before the solve-free classifier abandons the cluster to `:supportable`
+  (`VAELII_CLASSIFY_RESOLUTION_BUDGET`, default 20000).  A cluster of `m` members has
+  2^m - 1 candidate subsets, so under the default member cap of 12 (at most 4,095) the
+  budget binds only once `VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS` is raised above 14.  A
+  per-read search bound, nothing retained.  Read per classification by
+  `vaelii.impl.asp.label/classify-local`."
+  []
+  (prop-long "VAELII_CLASSIFY_RESOLUTION_BUDGET" 20000 1 nil))
+
+(defn classify-max-joint-optima
+  "The cap on the product of optima a cross-cluster datum's classification enumerates —
+  the clusters that move the datum, times their optima
+  (`VAELII_CLASSIFY_MAX_JOINT_OPTIMA`, default 1024).  A datum whose product is larger is
+  left `:supportable`, since its class needs joint resolutions a backend enumerates.
+  Read per classification by `vaelii.impl.asp.label/classify-local`."
+  []
+  (prop-long "VAELII_CLASSIFY_MAX_JOINT_OPTIMA" 1024 1 nil))
+
 ;; ---- the roster ---------------------------------------------------------
 
 (def read-at-kinds
@@ -460,7 +502,10 @@
    {:names ["VAELII_CLINGO_MAX_BYTES"]              :reader #'clingo-max-program-bytes     :read-at :worker}
    {:names ["VAELII_ASP_TIME_LIMIT"]                :reader #'asp-time-limit               :read-at :worker}
    {:names ["VAELII_MAX_QUERY_MS"]                  :reader #'max-query-ms                 :read-at :open}
-   {:names ["VAELII_MAX_QUERY_DEPTH"]               :reader #'max-query-depth              :read-at :open}])
+   {:names ["VAELII_MAX_QUERY_DEPTH"]               :reader #'max-query-depth              :read-at :open}
+   {:names ["VAELII_CLASSIFY_MAX_CLUSTER_MEMBERS"] :reader #'classify-max-cluster-members :read-at :worker}
+   {:names ["VAELII_CLASSIFY_RESOLUTION_BUDGET"]   :reader #'classify-resolution-budget   :read-at :worker}
+   {:names ["VAELII_CLASSIFY_MAX_JOINT_OPTIMA"]    :reader #'classify-max-joint-optima    :read-at :worker}])
 
 (def switch-names
   "Every spelling on the roster, sorted.  `opts/check!`'s promise at the process entry point: a

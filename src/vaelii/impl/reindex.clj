@@ -41,12 +41,11 @@
   taking the index store rather than a kb.  Kept in lockstep by `reindex_test`'s
   equivalence check."
   [index handle rule-sentex]
-  (let [s (:sentence rule-sentex)]
-    (p/index-rule index handle
-                  (rules/antecedent-predicates s)
-                  (rules/consequent-index-pred rule-sentex))
-    (when (rules/rechecked? rule-sentex)
-      (p/index-exception index handle (rules/recheck-predicates rule-sentex)))))
+  (p/index-rule index handle
+                (rules/antecedent-keys (:antecedent rule-sentex))
+                (rules/consequent-index-pred rule-sentex))
+  (when (rules/rechecked? rule-sentex)
+    (p/index-exception index handle (rules/recheck-predicates rule-sentex))))
 
 (defn- index-exceptWhen-entry
   "Register an exceptWhen meta-sentex's exception the way

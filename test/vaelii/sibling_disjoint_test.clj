@@ -232,8 +232,9 @@
     (v/retract! kb (v/handle-of kb (list 'siblingDisjointException a b) 'CxUniverse))
     (testing "retracting it re-separates the pair"
       (is (v/disjoint? kb a b)))
-    (testing "and the re-arm sweep exposes the clash the ab-initio pair now forms"
-      (is (= [:disjoint] (mapv :violation (v/violations kb)))))
+    (testing "and the re-arm sweep decides the clash the ab-initio pair now forms"
+      (is (= [:disjoint] (mapv :kind (v/contradictions kb))))
+      (is (empty? (v/violations kb)) "decided, so not also filed as exposed"))
     (testing "a fresh term can no longer hold both"
       (let [y (tu/tmp-ind)]
         (v/assert kb (list a y) 'CxUniverse)

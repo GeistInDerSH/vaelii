@@ -89,7 +89,7 @@
   posted either way (the cache adds are refcounted and idempotent)."
   [kb sentex handle]
   (let [result (special/integrate-sentex kb sentex handle)]
-    (special/recheck-on-sentence kb (:sentence sentex))
+    (special/recheck-on-sentence kb (sx/sentence-of sentex))
     result))
 
 (defn sentex-removed!
@@ -105,7 +105,7 @@
   ;; Capture the except target *before* any mutation — the sentex record is about to be
   ;; deleted, so extracting it afterward would depend on the local binding outliving
   ;; storage.  Binding here makes the before/after contract structural.
-  (let [except-target (kb/except-target (:sentence sentex))]
+  (let [except-target (kb/except-target (sx/sentence-of sentex))]
     ;; the removal record, for a caller scoping its own follow-up work to what left
     (when-let [sink *removed-sink*] (vswap! sink conj sentex))
     (special/disintegrate-sentex! kb sentex)
@@ -119,23 +119,23 @@
     ;; the handle cache holds "this sentence is stored at this handle", and this is the
     ;; one event that falsifies it — so the invalidation belongs beside the removal
     ;; itself, not in the caller that happens to have a cache bound
-    (observe/forget-handle! (:sentence sentex) (:context sentex))
+    (observe/forget-handle! (sx/sentence-of sentex) (:context sentex))
     ;; maintain the P/¬P coincidence set (this removal may have dissolved an opposing
     ;; pair); read after `unindex-sentex!` so the departing fact is already gone
-    (kb/note-opposed! kb (:sentence sentex))
+    (kb/note-opposed! kb (sx/sentence-of sentex))
     ;; ...and the visibility roster, the remove half of `kb/create-sentex`'s add.  Order
     ;; does not matter to this one — it reads the departing sentex rather than the index
     (kb/note-excepted! kb sentex false)
     ;; ...and the argument-preservation roster, the remove half of `kb/create-sentex`'s
     ;; add.  Reads the departing sentex rather than the index, so order does not matter
     ;; to this one either
-    (kb/note-preserving! kb (:sentence sentex) false)
+    (kb/note-preserving! kb (sx/sentence-of sentex) false)
     ;; An except's departure changes the effective belief of the declaration it hid.
     ;; Run after the roster drop so the common reconcile reads the new visibility state;
     ;; report the visibility move explicitly because the exception record is already gone.
     (when except-target
       (special/reconcile-belief-change kb #{except-target} true))
-    (special/recheck-on-sentence kb (:sentence sentex))))
+    (special/recheck-on-sentence kb (sx/sentence-of sentex))))
 
 ;; ## A `symmetric` mark arriving after the facts
 ;;
@@ -205,9 +205,8 @@
                        (not (jtms/has-justification? tms (:informant j) antes
                                                      (:consequence j))))]
       (let [nid  (p/next-id recs)
-            just (assoc (jtms/->just nid (:informant j) antes (:consequence j)
-                                     (:bindings j) (:strength j))
-                        :out (set (:out j)))]
+            just (jtms/->just nid (:informant j) antes (:consequence j)
+                              (:bindings j) (:strength j))]
         (p/put-justification recs just)
         (jtms/add-justification tms just)))))
 
@@ -238,9 +237,8 @@
                        (not (jtms/has-justification? tms (:informant j) (:antecedents j)
                                                      survivor)))]
       (let [nid  (p/next-id recs)
-            just (assoc (jtms/->just nid (:informant j) (vec (:antecedents j)) survivor
-                                     (:bindings j) (:strength j))
-                        :out (set (:out j)))]
+            just (jtms/->just nid (:informant j) (vec (:antecedents j)) survivor
+                              (:bindings j) (:strength j))]
         (p/put-justification recs just)
         (jtms/add-justification tms just)))))
 
